@@ -1,0 +1,30 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Jarvis Mobile: Build Debug APK",
+			"type": "shell",
+			"command": "cd mobile && ./gradlew :app:assembleDebug",
+			"group": "build",
+			"problemMatcher": []
+		},
+		{
+			"label": "Jarvis Mobile: Install Debug",
+			"type": "shell",
+			"command": "cd mobile && ./gradlew :app:installDebug",
+			"problemMatcher": []
+		},
+		{
+			"label": "Jarvis Mobile: Launch App",
+			"type": "shell",
+			"command": "adb shell am start -n com.jarvis/.MainActivity",
+			"problemMatcher": []
+		},
+		{
+			"label": "Jarvis Mobile: Dev Run (Install + Launch)",
+			"type": "shell",
+			"command": "cd mobile && ./scripts/dev.sh",
+			"problemMatcher": []
+		}
+	]
+}

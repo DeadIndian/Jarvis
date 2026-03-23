@@ -1,0 +1,8 @@
+<resources>
+    <style name="Theme.Jarvis" parent="Theme.MaterialComponents.DayNight.DarkActionBar">
+        <item name="colorPrimary">#222</item>
+        <item name="colorPrimaryVariant">#333</item>
+        <item name="colorOnPrimary">#fff</item>
+        <item name="android:windowBackground">#222</item>
+    </style>
+</resources>
