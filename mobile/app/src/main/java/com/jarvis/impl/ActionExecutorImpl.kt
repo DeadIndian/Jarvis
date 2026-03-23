@@ -13,29 +13,34 @@ import java.time.format.DateTimeFormatter
 class ActionExecutorImpl(private val context: Context) : ActionExecutor {
     override fun execute(command: CommandDefinition, rawInput: String): ActionResult {
         return try {
-            when (command.id) {
-                "system.time" -> {
+            when (command.executes.handler) {
+                "system/time" -> {
                     val now = LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm"))
                     ActionResult(true, "It is $now")
                 }
 
-                "app.open.settings" -> {
+                "device/open_settings" -> {
                     val intent = Intent(Settings.ACTION_SETTINGS).apply {
                         flags = Intent.FLAG_ACTIVITY_NEW_TASK
                     }
                     context.startActivity(intent)
-                    ActionResult(true, "Opened settings")
+                    val response = command.response.success.ifBlank { "Opened settings" }
+                    ActionResult(true, response)
                 }
 
-                "assistant.mode.toggle" -> ActionResult(true, "Mode toggle requested")
+                "assistant/toggle_mode" -> ActionResult(true, "Mode toggle requested")
 
-                "reminder.quick" -> {
+                "assistant/reminder" -> {
                     val intent = Intent(AlarmClock.ACTION_SHOW_ALARMS).apply {
                         flags = Intent.FLAG_ACTIVITY_NEW_TASK
                     }
                     context.startActivity(intent)
-                    ActionResult(true, "Opened alarm app")
+                    val response = command.response.success.ifBlank { "Opened alarm app" }
+                    ActionResult(true, response)
                 }
+
+                // Custom reply intentionally uses command response text from config.
+                "custom/reply" -> ActionResult(true, command.response.success)
 
                 else -> ActionResult(true, command.response.success)
             }

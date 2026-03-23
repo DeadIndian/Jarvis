@@ -67,6 +67,62 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
+            android:text="Custom Commands"
+            android:textColor="#C8D5EA"
+            android:textStyle="bold" />
+
+        <EditText
+            android:id="@+id/customKeywordsInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:background="#1B1D22"
+            android:hint="Keywords / phrases (comma separated)"
+            android:inputType="text"
+            android:padding="12dp"
+            android:textColor="#FFFFFF"
+            android:textColorHint="#8791A1" />
+
+        <Spinner
+            android:id="@+id/customActionSpinner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp" />
+
+        <EditText
+            android:id="@+id/customResponseInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:background="#1B1D22"
+            android:hint="Response text (for reply action)"
+            android:inputType="text"
+            android:padding="12dp"
+            android:textColor="#FFFFFF"
+            android:textColorHint="#8791A1" />
+
+        <Button
+            android:id="@+id/saveCustomCommandButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Save Custom Command" />
+
+        <TextView
+            android:id="@+id/customCommandsPreview"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:background="#15181E"
+            android:padding="12dp"
+            android:text="No custom commands yet"
+            android:textColor="#AFC0D9"
+            android:textSize="13sp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
             android:text="Set Mode"
             android:textColor="#C8D5EA"
             android:textStyle="bold" />
@@ -120,7 +176,7 @@
             android:layout_marginTop="16dp"
             android:background="#15181E"
             android:padding="12dp"
-            android:text="Try: time, open settings, remind me to drink water, help"
+            android:text="Try: time, open settings, remind me, help. You can also save custom keyword commands above."
             android:textColor="#AFC0D9"
             android:textSize="13sp" />
 
