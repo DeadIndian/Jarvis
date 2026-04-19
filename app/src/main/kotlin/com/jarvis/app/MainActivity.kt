@@ -8,12 +8,14 @@ import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
+import android.widget.ProgressBar
 import android.widget.Spinner
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.ViewModelProvider
 import com.jarvis.core.Event
 import com.jarvis.core.InMemoryEventBus
 import com.jarvis.core.JarvisState
@@ -21,42 +23,66 @@ import com.jarvis.execution.PipelineOrchestrator
 import com.jarvis.execution.SkillExecutionEngine
 import com.jarvis.intent.RuleBasedIntentRouter
 import com.jarvis.llm.LocalFirstLLMRouter
+import com.jarvis.llm.LLMProvider
 import com.jarvis.memory.MarkdownFileMemoryStore
 import com.jarvis.planner.SimplePlanner
 import com.jarvis.skills.AppLauncherSkill
 import com.jarvis.skills.InMemorySkillRegistry
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
+    private enum class MicPermissionReason {
+        VOICE_CAPTURE,
+        WAKE_WORD
+    }
+
     private lateinit var statusText: TextView
     private lateinit var logText: TextView
     private lateinit var inputText: EditText
     private lateinit var modelSpinner: Spinner
     private lateinit var modelStatusText: TextView
+    private lateinit var modelStatusDetailText: TextView
     private lateinit var installedModelsText: TextView
+    private lateinit var downloadProgressBar: ProgressBar
+    private lateinit var downloadProgressText: TextView
+    private lateinit var modelErrorText: TextView
     private lateinit var orchestrator: PipelineOrchestrator
     private lateinit var speechToText: AndroidSpeechToText
+    private lateinit var wakeWordEngine: OpenWakeWordEngine
     private lateinit var modelManager: OnDeviceModelManager
+    private lateinit var modelViewModel: ModelStatusViewModel
     private lateinit var modelAdapter: ArrayAdapter<String>
     private val logger = AndroidLogJarvisLogger()
     private var lastRuntimeServiceState: JarvisState? = null
+    private var lastWakeWordState: JarvisState? = null
+    private var pendingMicPermissionReason: MicPermissionReason? = null
     private var knownModels: List<OnDeviceModel> = emptyList()
 
     private val microphonePermissionRequest = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
-        when (VoiceInputPolicy.onPermissionResult(granted)) {
-            VoiceInputAction.START_LISTENING -> {
-                appendLog("Microphone permission granted")
-                startVoiceCapture()
-            }
+        val reason = pendingMicPermissionReason
+        pendingMicPermissionReason = null
 
-            VoiceInputAction.PERMISSION_DENIED -> {
-                appendLog("Microphone permission denied. Voice input unavailable.")
+        if (granted) {
+            appendLog("Microphone permission granted")
+            when (reason) {
+                MicPermissionReason.WAKE_WORD -> startWakeWordEngine()
+                MicPermissionReason.VOICE_CAPTURE, null -> startVoiceCapture()
             }
+        } else {
+            when (reason) {
+                MicPermissionReason.WAKE_WORD -> {
+                    appendLog("Microphone permission denied. Wake-word unavailable in HOUSE_PARTY.")
+                }
 
-            VoiceInputAction.REQUEST_PERMISSION -> Unit
+                MicPermissionReason.VOICE_CAPTURE, null -> {
+                    appendLog("Microphone permission denied. Voice input unavailable.")
+                }
+            }
         }
     }
 
@@ -69,10 +95,26 @@ class MainActivity : AppCompatActivity() {
         inputText = findViewById(R.id.inputText)
         modelSpinner = findViewById(R.id.modelSpinner)
         modelStatusText = findViewById(R.id.modelStatusText)
+        modelStatusDetailText = findViewById(R.id.modelStatusDetailText)
         installedModelsText = findViewById(R.id.installedModelsText)
+        downloadProgressBar = findViewById(R.id.downloadProgressBar)
+        downloadProgressText = findViewById(R.id.downloadProgressText)
+        modelErrorText = findViewById(R.id.modelErrorText)
 
-        modelManager = MlKitNativeModelManager(applicationContext, logger)
+        modelManager = LiteRtOnDeviceModelManager(
+            context = applicationContext,
+            logger = logger,
+            modelDirectoryPath = BuildConfig.JARVIS_LITERT_MODEL_DIR,
+            huggingFaceToken = BuildConfig.JARVIS_HF_TOKEN
+        )
+        modelViewModel = ViewModelProvider(this, object : androidx.lifecycle.ViewModelProvider.Factory {
+            override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T {
+                return ModelStatusViewModel(modelManager, logger) as T
+            }
+        }).get(ModelStatusViewModel::class.java)
+        
         setupModelControls()
+        observeModelState()
 
         orchestrator = buildOrchestrator()
         speechToText = AndroidSpeechToText(
@@ -81,6 +123,12 @@ class MainActivity : AppCompatActivity() {
             onPartialResult = { partial -> runOnUiThread { inputText.setText(partial) } },
             onFinalResult = { finalText -> dispatch(Event.VoiceInput(finalText)) },
             onError = { message -> runOnUiThread { appendLog("STT error: $message") } }
+        )
+        wakeWordEngine = OpenWakeWordEngine(
+            context = this,
+            logger = logger,
+            onWakeWordDetected = { keyword -> dispatch(Event.WakeWordDetected(keyword)) },
+            onError = { message -> runOnUiThread { appendLog("Wake-word error: $message") } }
         )
 
         findViewById<Button>(R.id.sendButton).setOnClickListener {
@@ -112,11 +160,14 @@ class MainActivity : AppCompatActivity() {
 
         updateStatus("State: ${orchestrator.currentState().name}")
         syncRuntimeService(orchestrator.currentState())
+        syncWakeWordEngine(orchestrator.currentState())
         refreshModelList()
+        appendLog("LLM backend: ${BuildConfig.JARVIS_LLM_BACKEND}")
         appendLog("Jarvis MVP initialized")
     }
 
     override fun onDestroy() {
+        wakeWordEngine.release()
         speechToText.release()
         super.onDestroy()
     }
@@ -128,6 +179,7 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread {
                 updateStatus("State: ${state.name}")
                 syncRuntimeService(state)
+                syncWakeWordEngine(state)
                 appendLog("Event: ${event::class.simpleName}")
             }
         }
@@ -137,9 +189,27 @@ class MainActivity : AppCompatActivity() {
         val eventBus = InMemoryEventBus()
         val installedAppLauncher = InstalledAppLauncher(this)
         val memoryStore = MarkdownFileMemoryStore()
+        val backendMode = BuildConfig.JARVIS_LLM_BACKEND.lowercase()
+
+        val localProvider: LLMProvider? = when (backendMode) {
+            "cloud-only", "gemini" -> null
+            else -> LiteRtNativeLLMProvider(modelManager = modelManager, logger = logger)
+        }
+
+        val cloudProvider: LLMProvider? = when (backendMode) {
+            "local-only", "litert", "mlkit" -> null
+            else -> {
+                if (BuildConfig.JARVIS_GEMINI_API_KEY.isBlank()) {
+                    logger.warn("llm", "Gemini fallback is disabled because API key is missing")
+                    null
+                } else {
+                    GeminiCloudLLMProvider(apiKey = BuildConfig.JARVIS_GEMINI_API_KEY)
+                }
+            }
+        }
         val llmRouter = LocalFirstLLMRouter(
-            localProvider = MlKitNativeLLMProvider(modelManager = modelManager, logger = logger),
-            cloudProvider = null,
+            localProvider = localProvider,
+            cloudProvider = cloudProvider,
             logger = logger
         )
         val skillRegistry = InMemorySkillRegistry().apply {
@@ -160,7 +230,7 @@ class MainActivity : AppCompatActivity() {
             logger = logger,
             memoryStore = memoryStore,
             llmRouter = llmRouter,
-            allowCloudFallback = false
+            allowCloudFallback = cloudProvider != null
         )
     }
 
@@ -184,27 +254,14 @@ class MainActivity : AppCompatActivity() {
         modelSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
                 val selected = knownModels.getOrNull(position) ?: return
-                lifecycleScope.launch(Dispatchers.IO) {
-                    runCatching { modelManager.setActiveModel(selected.id) }
-                        .onSuccess {
-                            runOnUiThread {
-                                renderModelStatus(selected)
-                                appendLog("Active model: ${selected.title}")
-                            }
-                        }
-                        .onFailure { error ->
-                            runOnUiThread {
-                                appendLog("Model select failed: ${error.message}")
-                            }
-                        }
-                }
+                modelViewModel.selectModel(selected.id)
             }
 
             override fun onNothingSelected(parent: AdapterView<*>?) = Unit
         }
 
         findViewById<Button>(R.id.refreshModelsButton).setOnClickListener {
-            refreshModelList()
+            modelViewModel.refreshModelList()
         }
 
         findViewById<Button>(R.id.downloadModelButton).setOnClickListener {
@@ -213,20 +270,7 @@ class MainActivity : AppCompatActivity() {
                 appendLog("No model selected")
                 return@setOnClickListener
             }
-            lifecycleScope.launch(Dispatchers.IO) {
-                runCatching { modelManager.downloadModel(selected.id) }
-                    .onSuccess {
-                        runOnUiThread {
-                            appendLog("Downloaded model: ${selected.title}")
-                            refreshModelList()
-                        }
-                    }
-                    .onFailure { error ->
-                        runOnUiThread {
-                            appendLog("Model download failed: ${error.message}")
-                        }
-                    }
-            }
+            modelViewModel.downloadModel(selected.id)
         }
 
         findViewById<Button>(R.id.deleteModelButton).setOnClickListener {
@@ -235,74 +279,109 @@ class MainActivity : AppCompatActivity() {
                 appendLog("No model selected")
                 return@setOnClickListener
             }
-            lifecycleScope.launch(Dispatchers.IO) {
-                runCatching { modelManager.deleteModel(selected.id) }
-                    .onSuccess {
-                        runOnUiThread {
-                            appendLog("Cleared model cache: ${selected.title}")
-                            refreshModelList()
-                        }
-                    }
-                    .onFailure { error ->
-                        runOnUiThread {
-                            appendLog("Model delete failed: ${error.message}")
-                        }
-                    }
+            modelViewModel.deleteModel(selected.id)
+        }
+    }
+
+    private fun observeModelState() {
+        modelViewModel.uiState
+            .onEach { state ->
+                updateModelUI(state)
             }
+            .launchIn(lifecycleScope)
+    }
+
+    private fun updateModelUI(state: ModelStatusUiState) {
+        // Update model list
+        knownModels = state.models
+        val labels = state.models.map { model ->
+            val status = when (model.status) {
+                OnDeviceModelStatus.DOWNLOADING -> "↓ Downloading"
+                OnDeviceModelStatus.AVAILABLE -> "✓ Available"
+                OnDeviceModelStatus.DOWNLOADABLE -> "⬇ Ready to download"
+                OnDeviceModelStatus.UNAVAILABLE -> "✗ Unavailable"
+                OnDeviceModelStatus.UNKNOWN -> "? Unknown - tap Download"
+            }
+            "${model.title} [$status]"
+        }
+        modelAdapter.clear()
+        modelAdapter.addAll(labels)
+        modelAdapter.notifyDataSetChanged()
+
+        // Update installed models count
+        val installed = state.models.filter { it.status == OnDeviceModelStatus.AVAILABLE }
+        installedModelsText.text = if (installed.isEmpty()) {
+            "Installed: none"
+        } else {
+            "Installed: " + installed.joinToString { it.title }
+        }
+
+        // Update active model selection and status
+        if (state.activeModelId != null) {
+            val activeIndex = state.models.indexOfFirst { it.id == state.activeModelId }
+            if (activeIndex >= 0) {
+                modelSpinner.setSelection(activeIndex)
+                val activeModel = state.models[activeIndex]
+                renderModelStatus(activeModel)
+            }
+        }
+
+        // Update download progress
+        if (state.downloadingModelId != null) {
+            downloadProgressBar.visibility = View.VISIBLE
+            downloadProgressText.visibility = View.VISIBLE
+            downloadProgressBar.progress = state.downloadProgress
+            downloadProgressText.text = "Downloading... ${state.downloadProgress}%"
+            appendLog("Downloading model: ${state.downloadProgress}%")
+        } else {
+            downloadProgressBar.visibility = View.GONE
+            downloadProgressText.visibility = View.GONE
+        }
+
+        // Update error message
+        if (state.errorMessage != null) {
+            modelErrorText.visibility = View.VISIBLE
+            modelErrorText.text = state.errorMessage
+            appendLog("Model error: ${state.errorMessage}")
+        } else {
+            modelErrorText.visibility = View.GONE
+        }
+
+        // Show loading state
+        if (state.isLoading) {
+            appendLog("Loading models...")
         }
     }
 
     private fun refreshModelList() {
-        lifecycleScope.launch(Dispatchers.IO) {
-            val models = runCatching { modelManager.listModels() }
-                .getOrElse {
-                    runOnUiThread { appendLog("Model list failed: ${it.message}") }
-                    return@launch
-                }
-            val activeModelId = runCatching { modelManager.getActiveModelId() }
-                .getOrElse {
-                    runOnUiThread { appendLog("Active model resolve failed: ${it.message}") }
-                    return@launch
-                }
-
-            runOnUiThread {
-                knownModels = models
-                val labels = models.map { model ->
-                    "${model.title} [${model.source.name.lowercase()} | ${model.status.name.lowercase()}]"
-                }
-                modelAdapter.clear()
-                modelAdapter.addAll(labels)
-                modelAdapter.notifyDataSetChanged()
-
-                val installed = models.filter { it.status == OnDeviceModelStatus.AVAILABLE }
-                installedModelsText.text = if (installed.isEmpty()) {
-                    "Installed: none"
-                } else {
-                    "Installed: " + installed.joinToString { it.title }
-                }
-
-                val activeIndex = models.indexOfFirst { it.id == activeModelId }
-                if (activeIndex >= 0) {
-                    modelSpinner.setSelection(activeIndex)
-                    renderModelStatus(models[activeIndex])
-                } else {
-                    modelStatusText.text = "No model selected"
-                }
-            }
-        }
+        modelViewModel.refreshModelList()
     }
 
     private fun renderModelStatus(model: OnDeviceModel) {
-        modelStatusText.text =
-            "Selected: ${model.title} | Source: ${model.source.name.lowercase()} | Status: ${model.status.name.lowercase()}"
+        modelStatusText.text = "Selected: ${model.title}"
+        
+        val statusLabel = when (model.status) {
+            OnDeviceModelStatus.AVAILABLE -> "✓ Available (ready to use)"
+            OnDeviceModelStatus.DOWNLOADING -> "↓ Downloading..."
+            OnDeviceModelStatus.DOWNLOADABLE -> "⬇ Ready to download"
+            OnDeviceModelStatus.UNAVAILABLE -> "✗ Unavailable (not supported)"
+            OnDeviceModelStatus.UNKNOWN -> "? Status probe failed; tap Download to attempt install"
+        }
+        
+        modelStatusDetailText.text = "Status: $statusLabel | Source: ${model.source.name.lowercase()}"
     }
 
     private fun requestMicAndStartListening() {
         when (VoiceInputPolicy.onVoiceButtonTapped(hasMicPermission())) {
             VoiceInputAction.START_LISTENING -> startVoiceCapture()
-            VoiceInputAction.REQUEST_PERMISSION -> microphonePermissionRequest.launch(Manifest.permission.RECORD_AUDIO)
+            VoiceInputAction.REQUEST_PERMISSION -> requestMicrophonePermission(MicPermissionReason.VOICE_CAPTURE)
             VoiceInputAction.PERMISSION_DENIED -> Unit
         }
+    }
+
+    private fun requestMicrophonePermission(reason: MicPermissionReason) {
+        pendingMicPermissionReason = reason
+        microphonePermissionRequest.launch(Manifest.permission.RECORD_AUDIO)
     }
 
     private fun hasMicPermission(): Boolean {
@@ -313,6 +392,32 @@ class MainActivity : AppCompatActivity() {
     private fun startVoiceCapture() {
         appendLog("Listening for voice input...")
         speechToText.startListening()
+    }
+
+    private fun startWakeWordEngine() {
+        if (!hasMicPermission()) {
+            requestMicrophonePermission(MicPermissionReason.WAKE_WORD)
+            return
+        }
+        wakeWordEngine.start(keyword = "jarvis")
+        appendLog("Wake-word engine active (keyword: jarvis)")
+    }
+
+    private fun syncWakeWordEngine(state: JarvisState) {
+        when (WakeWordPolicy.decide(lastWakeWordState, state)) {
+            WakeWordAction.NONE -> Unit
+            WakeWordAction.STOP -> {
+                lastWakeWordState = state
+                wakeWordEngine.stop()
+                logger.info("wakeword", "Wake-word lifecycle stopped", mapOf("state" to state.name))
+            }
+
+            WakeWordAction.START -> {
+                lastWakeWordState = state
+                startWakeWordEngine()
+                logger.info("wakeword", "Wake-word lifecycle started", mapOf("state" to state.name))
+            }
+        }
     }
 
     private fun syncRuntimeService(state: JarvisState) {

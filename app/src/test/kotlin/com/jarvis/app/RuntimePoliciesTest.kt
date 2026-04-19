@@ -46,4 +46,32 @@ class RuntimePoliciesTest {
 
         assertEquals(VoiceInputAction.PERMISSION_DENIED, action)
     }
+
+    @Test
+    fun wakeWordPolicyStartsInHouseParty() {
+        val action = WakeWordPolicy.decide(previous = JarvisState.ACTIVE, current = JarvisState.HOUSE_PARTY)
+
+        assertEquals(WakeWordAction.START, action)
+    }
+
+    @Test
+    fun wakeWordPolicyStaysRunningInActive() {
+        val action = WakeWordPolicy.decide(previous = JarvisState.HOUSE_PARTY, current = JarvisState.ACTIVE)
+
+        assertEquals(WakeWordAction.START, action)
+    }
+
+    @Test
+    fun wakeWordPolicyStopsInIdle() {
+        val action = WakeWordPolicy.decide(previous = JarvisState.HOUSE_PARTY, current = JarvisState.IDLE)
+
+        assertEquals(WakeWordAction.STOP, action)
+    }
+
+    @Test
+    fun wakeWordPolicySkipsDuplicateStateTransitions() {
+        val action = WakeWordPolicy.decide(previous = JarvisState.HOUSE_PARTY, current = JarvisState.HOUSE_PARTY)
+
+        assertEquals(WakeWordAction.NONE, action)
+    }
 }

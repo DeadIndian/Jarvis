@@ -14,6 +14,12 @@ enum class VoiceInputAction {
     PERMISSION_DENIED
 }
 
+enum class WakeWordAction {
+    START,
+    STOP,
+    NONE
+}
+
 object RuntimeServicePolicy {
     fun decide(previous: JarvisState?, current: JarvisState): RuntimeServiceAction {
         if (previous == current) {
@@ -41,6 +47,19 @@ object VoiceInputPolicy {
             VoiceInputAction.START_LISTENING
         } else {
             VoiceInputAction.PERMISSION_DENIED
+        }
+    }
+}
+
+object WakeWordPolicy {
+    fun decide(previous: JarvisState?, current: JarvisState): WakeWordAction {
+        if (previous == current) {
+            return WakeWordAction.NONE
+        }
+        return if (current == JarvisState.HOUSE_PARTY || current == JarvisState.ACTIVE) {
+            WakeWordAction.START
+        } else {
+            WakeWordAction.STOP
         }
     }
 }

@@ -29,21 +29,58 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp" />
 
-        <TextView
-            android:id="@+id/modelStatusText"
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="6dp"
-            android:text="Selected: none"
-            android:textSize="14sp" />
+            android:orientation="vertical"
+            android:padding="8dp"
+            android:background="#f5f5f5">
 
-        <TextView
-            android:id="@+id/installedModelsText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:text="Installed: none"
-            android:textSize="13sp" />
+            <TextView
+                android:id="@+id/modelStatusText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Selected: none"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/modelStatusDetailText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="Status: —"
+                android:textSize="12sp" />
+
+            <ProgressBar
+                android:id="@+id/downloadProgressBar"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:visibility="gone"
+                style="?android:attr/progressBarStyleHorizontal"
+                android:progress="0"
+                android:max="100" />
+
+            <TextView
+                android:id="@+id/downloadProgressText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:text=""
+                android:textSize="11sp"
+                android:visibility="gone" />
+
+            <TextView
+                android:id="@+id/installedModelsText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="Installed: none"
+                android:textSize="12sp" />
+
+        </LinearLayout>
 
         <LinearLayout
             android:layout_width="match_parent"
@@ -74,6 +111,15 @@
                 android:layout_weight="1"
                 android:text="Delete" />
         </LinearLayout>
+
+        <TextView
+            android:id="@+id/modelErrorText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:textColor="#d32f2f"
+            android:textSize="12sp"
+            android:visibility="gone" />
 
         <EditText
             android:id="@+id/inputText"

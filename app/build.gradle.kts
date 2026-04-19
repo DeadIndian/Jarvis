@@ -3,9 +3,50 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+val dotEnvValues: Map<String, String> = run {
+    val envFile = rootProject.file(".env")
+    if (!envFile.exists()) {
+        emptyMap()
+    } else {
+        envFile.readLines()
+            .asSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && !it.startsWith("#") && it.contains("=") }
+            .map { line ->
+                val idx = line.indexOf('=')
+                val key = line.substring(0, idx).trim()
+                val rawValue = line.substring(idx + 1).trim()
+                val value = rawValue.removeSurrounding("\"").removeSurrounding("'")
+                key to value
+            }
+            .toMap()
+    }
+}
+
+fun resolveConfigValue(key: String, default: String = ""): String {
+    return dotEnvValues[key]
+        ?: (findProperty(key) as String?)
+        ?: System.getenv(key)
+        ?: default
+}
+
+val geminiApiKey: String = resolveConfigValue("JARVIS_GEMINI_API_KEY")
+
+val llmBackend: String = resolveConfigValue("JARVIS_LLM_BACKEND", "hybrid")
+
+val liteRtModelDir: String = resolveConfigValue("JARVIS_LITERT_MODEL_DIR")
+
+val huggingFaceToken: String = resolveConfigValue("JARVIS_HF_TOKEN")
+
+fun esc(value: String): String = value.replace("\\", "\\\\").replace("\"", "\\\"")
+
 android {
     namespace = "com.jarvis.app"
     compileSdk = 35
+
+    buildFeatures {
+        buildConfig = true
+    }
 
     defaultConfig {
         applicationId = "com.jarvis.app"
@@ -13,6 +54,10 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0"
+        buildConfigField("String", "JARVIS_GEMINI_API_KEY", "\"${esc(geminiApiKey)}\"")
+        buildConfigField("String", "JARVIS_LLM_BACKEND", "\"${esc(llmBackend)}\"")
+        buildConfigField("String", "JARVIS_LITERT_MODEL_DIR", "\"${esc(liteRtModelDir)}\"")
+        buildConfigField("String", "JARVIS_HF_TOKEN", "\"${esc(huggingFaceToken)}\"")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -43,7 +88,7 @@ dependencies {
     implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.activity:activity-ktx:1.9.3")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.6")
-    implementation("com.google.mlkit:genai-prompt:1.0.0-beta2")
+    implementation("com.google.mediapipe:tasks-genai:0.10.27")
 
     implementation(project(":core"))
     implementation(project(":input"))
