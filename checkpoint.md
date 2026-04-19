@@ -49,7 +49,19 @@ This file is a working project snapshot so we can pause for side tasks and resum
   - Trigger timeout
 - UI output channel and Android logger adapters added.
 
-6. Build status
+6. Real app launch path
+
+- AppLauncher skill now delegates to an Android package-manager-backed launcher in the app module.
+- Launcher queries visible launchable apps and starts the matching installed app.
+- App manifest now declares launcher queries for package visibility.
+
+7. SpeechRecognizer input path
+
+- Android SpeechRecognizer integrated in app runtime with partial and final result callbacks.
+- Runtime RECORD_AUDIO permission flow wired end-to-end from UI mic button.
+- Denied permission and recognizer errors now surface degraded-mode logs in app UI.
+
+8. Build status
 
 - Debug APK successfully built:
   - app/build/outputs/apk/debug/app-debug.apk
@@ -76,8 +88,8 @@ What is placeholder/mock:
 
 1. Input and runtime
 
-- Integrate Android SpeechRecognizer path (partial + final).
-- Wire microphone permission flow end-to-end.
+- Integrate Android SpeechRecognizer path (partial + final). Completed in app MVP runtime.
+- Wire microphone permission flow end-to-end. Completed for mic button voice capture path.
 - Add foreground service lifecycle for assistant runtime.
 
 2. Skills and execution
@@ -105,8 +117,6 @@ What is placeholder/mock:
 
 ## Resume plan (recommended next execution order)
 
-1. Implement real AppLauncher skill (Android package manager).
-2. Integrate SpeechRecognizer with runtime permission checks.
-3. Add foreground service and tie it to state transitions.
-4. Add one persistence-backed memory store path.
-5. Expand tests for service and permission behavior.
+1. Add foreground service and tie it to state transitions.
+2. Add one persistence-backed memory store path.
+3. Expand tests for service and permission behavior.

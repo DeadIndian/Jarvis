@@ -43,6 +43,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.6")
 
     implementation(project(":core"))
+    implementation(project(":input"))
     implementation(project(":intent"))
     implementation(project(":planner"))
     implementation(project(":execution"))

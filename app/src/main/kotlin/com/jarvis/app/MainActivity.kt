@@ -1,10 +1,14 @@
 package com.jarvis.app
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.jarvis.core.Event
 import com.jarvis.core.InMemoryEventBus
@@ -22,6 +26,18 @@ class MainActivity : AppCompatActivity() {
     private lateinit var logText: TextView
     private lateinit var inputText: EditText
     private lateinit var orchestrator: PipelineOrchestrator
+    private lateinit var speechToText: AndroidSpeechToText
+
+    private val microphonePermissionRequest = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            appendLog("Microphone permission granted")
+            startVoiceCapture()
+        } else {
+            appendLog("Microphone permission denied. Voice input unavailable.")
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -32,6 +48,13 @@ class MainActivity : AppCompatActivity() {
         inputText = findViewById(R.id.inputText)
 
         orchestrator = buildOrchestrator()
+        speechToText = AndroidSpeechToText(
+            context = this,
+            logger = AndroidLogJarvisLogger(),
+            onPartialResult = { partial -> runOnUiThread { inputText.setText(partial) } },
+            onFinalResult = { finalText -> dispatch(Event.VoiceInput(finalText)) },
+            onError = { message -> runOnUiThread { appendLog("STT error: $message") } }
+        )
 
         findViewById<Button>(R.id.sendButton).setOnClickListener {
             val input = inputText.text.toString().trim()
@@ -56,8 +79,17 @@ class MainActivity : AppCompatActivity() {
             dispatch(Event.TimeoutElapsed)
         }
 
+        findViewById<Button>(R.id.voiceButton).setOnClickListener {
+            requestMicAndStartListening()
+        }
+
         updateStatus("State: ${orchestrator.currentState().name}")
         appendLog("Jarvis MVP initialized")
+    }
+
+    override fun onDestroy() {
+        speechToText.release()
+        super.onDestroy()
     }
 
     private fun dispatch(event: Event) {
@@ -73,8 +105,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun buildOrchestrator(): PipelineOrchestrator {
         val eventBus = InMemoryEventBus()
+        val installedAppLauncher = InstalledAppLauncher(this)
         val skillRegistry = InMemorySkillRegistry().apply {
-            register(AppLauncherSkill())
+            register(AppLauncherSkill(installedAppLauncher::launch))
         }
 
         val outputChannel = UiOutputChannel(
@@ -98,5 +131,23 @@ class MainActivity : AppCompatActivity() {
 
     private fun appendLog(line: String) {
         logText.text = logText.text.toString() + "\n" + line
+    }
+
+    private fun requestMicAndStartListening() {
+        if (hasMicPermission()) {
+            startVoiceCapture()
+            return
+        }
+        microphonePermissionRequest.launch(Manifest.permission.RECORD_AUDIO)
+    }
+
+    private fun hasMicPermission(): Boolean {
+        return ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun startVoiceCapture() {
+        appendLog("Listening for voice input...")
+        speechToText.startListening()
     }
 }
