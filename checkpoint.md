@@ -6,117 +6,134 @@ Last updated: 2026-04-19
 
 This file is a working project snapshot so we can pause for side tasks and resume quickly without losing context.
 
-## Completed so far
+## Status Summary
+
+This section is intentionally strict and reality-based.
+
+### Done
 
 1. Project scaffolding
 
-- Multi-module Kotlin structure created.
-- Modules wired in Gradle: app, core, input, intent, planner, execution, skills, memory, llm, output, android, logging.
-- Gradle wrapper added and working.
+- Multi-module Kotlin structure is present.
+- Modules are wired in Gradle: app, core, input, intent, planner, execution, skills, memory, llm, output, android, logging.
+- Gradle wrapper works.
 
-2. Core contracts and architecture baseline
+2. Core contracts and baseline wiring
 
 - State model and event contracts implemented in core.
 - Event bus interface and in-memory implementation added.
-- Module-level interfaces added for intent, planner, execution, skills, memory, llm, output, logging.
+- Module-level interfaces exist for intent, planner, execution, skills, memory, llm, output, logging.
 
-3. Pipeline vertical slice (MVP logic)
+3. Pipeline vertical slice (text and voice input to skill output)
 
 - Rule-based intent routing for OPEN_APP intent.
 - Simple planner mapping OPEN_APP to AppLauncher step.
-- In-memory skill registry and AppLauncher mock skill.
-- Skill execution engine.
-- Pipeline orchestrator with guarded state transitions.
-- State transitions handled for:
+- Skill execution engine and in-memory skill registry.
+- Pipeline orchestrator with guarded transitions.
+- Implemented state transitions:
   - PowerButtonHeld -> BARN_DOOR
   - HousePartyToggle(true) -> HOUSE_PARTY
   - WakeWordDetected only from HOUSE_PARTY -> ACTIVE
   - TimeoutElapsed -> IDLE
 
-4. Tests
+4. Android MVP app shell
 
-- Orchestrator transition and pipeline tests added in execution test module.
+- App module is wired and launchable.
+- Main activity provides controls for text input and state events.
+- UI output channel and Android logger adapter are connected.
 
-5. Android MVP app
+5. Real app launch behavior
 
-- New app module created and wired.
-- Launcher activity implemented with simple controls to dispatch events.
-- Basic UI added to:
-  - Send text input
-  - Trigger power hold
-  - Enable house party
-  - Trigger wake word
-  - Trigger timeout
-- UI output channel and Android logger adapters added.
+- AppLauncher skill in app runtime delegates to package-manager-based launcher.
+- Launcher queries installed launchable apps and starts matches.
+- Manifest has launcher queries for package visibility.
 
-6. Real app launch path
+6. SpeechRecognizer path and mic permission flow
 
-- AppLauncher skill now delegates to an Android package-manager-backed launcher in the app module.
-- Launcher queries visible launchable apps and starts the matching installed app.
-- App manifest now declares launcher queries for package visibility.
+- Android SpeechRecognizer is integrated with partial and final callbacks.
+- RECORD_AUDIO runtime permission flow is wired from the UI mic action.
+- Denied permission and recognizer errors show degraded-mode logs in app UI.
 
-7. SpeechRecognizer input path
+7. Foreground runtime service path
 
-- Android SpeechRecognizer integrated in app runtime with partial and final result callbacks.
-- Runtime RECORD_AUDIO permission flow wired end-to-end from UI mic button.
-- Denied permission and recognizer errors now surface degraded-mode logs in app UI.
+- Foreground service exists with notification channel and ongoing notification.
+- Service start/stop is tied to state-driven policy in app flow.
 
-8. Build status
+8. Memory and LLM module implementations (module-complete)
 
-- Debug APK successfully built:
-  - app/build/outputs/apk/debug/app-debug.apk
+- Memory: markdown file-backed store with key put/get and deterministic token search.
+- LLM: local-first router with optional cloud fallback gate.
 
-## Current product state
+9. Unit test coverage for implemented slices
 
-This is a functional MVP shell, not a full assistant yet.
+- Orchestrator transition and pipeline tests in execution module.
+- Runtime policy tests in app module.
+- App integration tests for pipeline wiring and launch command flow in app module.
+- Android smoke instrumentation test for launch -> input -> action flow.
+- Memory store unit tests in memory module.
+- Local-first router unit tests in llm module.
 
-What works now:
+10. Build artifact status
 
-- App installs and launches.
-- Event -> intent -> plan -> execute -> respond loop works for text input path.
-- State transitions can be tested from buttons in the app UI.
+- Debug APK present at app/build/outputs/apk/debug/app-debug.apk.
 
-What is placeholder/mock:
+11. Runtime memory + LLM orchestration integration
 
-- Real STT integration.
-- Real wake-word engine.
-- Real Android foreground/accessibility/overlay runtime services.
-- Real device actions (AppLauncher is mock output).
-- Real memory retrieval and llm routing.
+- Pipeline orchestrator now retrieves memory context per request.
+- Unknown or failed action paths now use LLM-generated conversational fallback responses.
+- Interaction summaries are persisted to memory store for future retrieval.
+- App runtime wires MarkdownFileMemoryStore + LocalFirstLLMRouter (local provider enabled, cloud fallback disabled).
 
-## Remaining work to reach practical MVP
+12. Execution policy hardening
 
-1. Input and runtime
+- Skill execution runtime now supports per-step timeout policy.
+- Skill execution runtime now supports per-step retry policy with capped retries.
+- Execution path supports cooperative cancellation via coroutine cancellation propagation.
+- Execution tests cover retry success, timeout failure, and cancellation behavior.
 
-- Integrate Android SpeechRecognizer path (partial + final). Completed in app MVP runtime.
-- Wire microphone permission flow end-to-end. Completed for mic button voice capture path.
-- Add foreground service lifecycle for assistant runtime.
+## Current Product State
 
-2. Skills and execution
+This is a working foundation MVP, not a practical end-user assistant.
 
-- Implement first real Android skill (open installed app by package resolution).
-- Add timeout/cancellation policy in execution runtime.
-- Add failure and retry handling by plan step policy.
+### Working now
 
-3. Memory and LLM
+- App installs, launches, and runs core event flow.
+- Input -> intent -> plan -> execute -> respond works for current MVP paths.
+- State transitions can be manually exercised from app UI controls.
 
-- Implement memory storage adapter and basic retrieval path.
-- Add LLM router stub implementation with local-first contract.
+### Still placeholder or not integrated
 
-4. Android integration hardening
+- Continuous conversation/runtime behavior beyond tap-to-listen capture.
+- Real wake-word engine integration (button simulation exists, real detector does not).
+- Accessibility and overlay service integration.
+- On-device model artifact management and runtime readiness checks for LiteRT-LM.
 
-- Improve manifest with required components and exported rules.
-- Add runtime degrade behavior for denied permissions.
-- Add simple diagnostics surface in UI.
+## Remaining Work To Reach Practical MVP
 
-5. Testing and release readiness
+1. Input/runtime completeness
 
-- Add integration tests for app module pipeline wiring.
-- Add smoke instrumentation test for launch and command flow.
+- Integrate a real wake-word engine and lifecycle gating by state.
+- Expand voice runtime behavior beyond current tap-to-listen MVP loop.
+
+2. Android system integration hardening
+
+- Add accessibility-service integration where required by product scope.
+- Add overlay permission/service path where required by product scope.
+- Validate background/doze behavior and restart reliability on device.
+
+3. Testing and release readiness
+
 - Add signed build instructions and release checklist.
 
-## Resume plan (recommended next execution order)
+4. Production on-device LLM readiness
 
-1. Add foreground service and tie it to state transitions.
-2. Add one persistence-backed memory store path.
-3. Expand tests for service and permission behavior.
+- Ship and manage on-device model artifacts (for current target: deepseek-r1-distill-qwen-1.5b.task).
+- Add runtime health checks and user guidance when model artifact is missing.
+- Tune prompt shaping and sampling defaults for production behavior.
+
+## Resume Plan (Recommended Next Order)
+
+1. Finalize LiteRT-LM on-device model packaging/download path for deepseek-r1-distill-qwen-1.5b.task.
+2. Integrate real wake-word engine lifecycle with state-gated activation.
+3. Add signed build instructions and release checklist.
+4. Harden accessibility and overlay service integration for product scope.

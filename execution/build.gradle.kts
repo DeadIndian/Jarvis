@@ -11,6 +11,8 @@ dependencies {
     implementation(project(":intent"))
     implementation(project(":planner"))
     implementation(project(":skills"))
+    implementation(project(":memory"))
+    implementation(project(":llm"))
     implementation(project(":output"))
     implementation(project(":logging"))
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")

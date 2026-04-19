@@ -13,7 +13,8 @@ Current MVP state:
 - A runnable Android app module exists and builds to a debug APK.
 - Core event-driven pipeline is wired and testable.
 - State transitions (IDLE, BARN_DOOR, ACTIVE, HOUSE_PARTY) are implemented and controllable from UI actions.
-- Initial skill execution path is present with a mock AppLauncher skill.
+- App launch skill path is wired to Android package manager resolution in app runtime.
+- SpeechRecognizer mic input and foreground runtime service paths are integrated in MVP form.
 
 This is a foundation MVP intended for rapid iteration toward full voice runtime, real skills, and persistent memory.
 
@@ -43,7 +44,7 @@ For an up-to-date work snapshot (done vs remaining), see checkpoint.md.
 
 ## Next milestone focus
 
-- Integrate real SpeechRecognizer input
-- Add foreground service runtime path
-- Replace mock app-launch skill with real Android app launch behavior
-- Add persistence-backed memory retrieval path
+- Integrate production on-device LLM runtime (LiteRT-LM, no HTTP server dependency)
+- Load and run local model artifacts on phone (deepseek-r1-distill-qwen-1.5b.task)
+- Keep memory retrieval + orchestration path local-first and private
+- Add release signing instructions and checklist
