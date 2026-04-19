@@ -51,6 +51,7 @@ class LiteRtOnDeviceModelManager(
 
     override suspend fun listModels(): List<OnDeviceModel> = withContext(Dispatchers.IO) {
         ensureModelDirectory()
+        val catalog = catalogById()
         val localArtifacts = discoverLocalArtifacts()
         val localModels = localArtifacts.map { artifact ->
             OnDeviceModel(
@@ -73,18 +74,19 @@ class LiteRtOnDeviceModelManager(
             status = deepSeekStatus
         )
 
-        val defaultBaseModel = if (localArtifacts.any { it.id == DEFAULT_BASE_MODEL_ID }) {
-            null
-        } else {
-            OnDeviceModel(
-                id = DEFAULT_BASE_MODEL_ID,
-                title = DEFAULT_BASE_MODEL_TITLE,
-                source = OnDeviceModelSource.LITERT,
-                status = OnDeviceModelStatus.DOWNLOADABLE
-            )
-        }
+        val downloadableCatalogModels = catalog.values
+            .filterNot { spec -> localArtifacts.any { it.id == spec.id } }
+            .sortedBy { spec -> spec.sortOrder }
+            .map { spec ->
+                OnDeviceModel(
+                    id = spec.id,
+                    title = spec.title,
+                    source = OnDeviceModelSource.LITERT,
+                    status = OnDeviceModelStatus.DOWNLOADABLE
+                )
+            }
 
-        listOfNotNull(defaultBaseModel) + localModels + deepSeekModel
+        downloadableCatalogModels + localModels + deepSeekModel
     }
 
     override suspend fun getActiveModelId(): String = withContext(Dispatchers.IO) {
@@ -225,7 +227,22 @@ class LiteRtOnDeviceModelManager(
                 id = DEFAULT_BASE_MODEL_ID,
                 title = DEFAULT_BASE_MODEL_TITLE,
                 fileName = DEFAULT_BASE_MODEL_FILE_NAME,
-                downloadUrl = DEFAULT_BASE_MODEL_URL
+                downloadUrl = DEFAULT_BASE_MODEL_URL,
+                sortOrder = 10
+            ),
+            GEMMA4_E2B_MODEL_ID to ModelCatalogEntry(
+                id = GEMMA4_E2B_MODEL_ID,
+                title = GEMMA4_E2B_MODEL_TITLE,
+                fileName = GEMMA4_E2B_MODEL_FILE_NAME,
+                downloadUrl = GEMMA4_E2B_MODEL_URL,
+                sortOrder = 20
+            ),
+            GEMMA4_E4B_MODEL_ID to ModelCatalogEntry(
+                id = GEMMA4_E4B_MODEL_ID,
+                title = GEMMA4_E4B_MODEL_TITLE,
+                fileName = GEMMA4_E4B_MODEL_FILE_NAME,
+                downloadUrl = GEMMA4_E4B_MODEL_URL,
+                sortOrder = 30
             )
         )
     }
@@ -324,7 +341,8 @@ class LiteRtOnDeviceModelManager(
         val id: String,
         val title: String,
         val fileName: String,
-        val downloadUrl: String
+        val downloadUrl: String,
+        val sortOrder: Int
     )
 
     private data class ModelArtifact(
@@ -342,5 +360,15 @@ class LiteRtOnDeviceModelManager(
         private const val DEFAULT_BASE_MODEL_TITLE = "Gemma 3 1B IT (LiteRT .litertlm)"
         private const val DEFAULT_BASE_MODEL_FILE_NAME = "Gemma3-1B-IT_multi-prefill-seq_q4_ekv4096.litertlm"
         private const val DEFAULT_BASE_MODEL_URL = "https://huggingface.co/litert-community/Gemma3-1B-IT/resolve/main/Gemma3-1B-IT_multi-prefill-seq_q4_ekv4096.litertlm"
+
+        private const val GEMMA4_E2B_MODEL_ID = "gemma-4-e2b-it"
+        private const val GEMMA4_E2B_MODEL_TITLE = "Gemma 4 E2B IT (LiteRT-LM .litertlm)"
+        private const val GEMMA4_E2B_MODEL_FILE_NAME = "gemma-4-E2B-it.litertlm"
+        private const val GEMMA4_E2B_MODEL_URL = "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm"
+
+        private const val GEMMA4_E4B_MODEL_ID = "gemma-4-e4b-it"
+        private const val GEMMA4_E4B_MODEL_TITLE = "Gemma 4 E4B IT (LiteRT-LM .litertlm)"
+        private const val GEMMA4_E4B_MODEL_FILE_NAME = "gemma-4-E4B-it.litertlm"
+        private const val GEMMA4_E4B_MODEL_URL = "https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm/resolve/main/gemma-4-E4B-it.litertlm"
     }
 }

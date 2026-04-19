@@ -3,6 +3,7 @@ package com.jarvis.app
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.speech.tts.TextToSpeech
 import android.view.View
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
@@ -32,6 +33,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
+import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
     private enum class MicPermissionReason {
@@ -56,6 +58,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var modelViewModel: ModelStatusViewModel
     private lateinit var modelAdapter: ArrayAdapter<String>
     private val logger = AndroidLogJarvisLogger()
+    private lateinit var textToSpeech: TextToSpeech
+    private var isTextToSpeechReady: Boolean = false
     private var lastRuntimeServiceState: JarvisState? = null
     private var lastWakeWordState: JarvisState? = null
     private var pendingMicPermissionReason: MicPermissionReason? = null
@@ -107,6 +111,7 @@ class MainActivity : AppCompatActivity() {
             modelDirectoryPath = BuildConfig.JARVIS_LITERT_MODEL_DIR,
             huggingFaceToken = BuildConfig.JARVIS_HF_TOKEN
         )
+        initializeTextToSpeech()
         modelViewModel = ViewModelProvider(this, object : androidx.lifecycle.ViewModelProvider.Factory {
             override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T {
                 return ModelStatusViewModel(modelManager, logger) as T
@@ -169,6 +174,10 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         wakeWordEngine.release()
         speechToText.release()
+        if (::textToSpeech.isInitialized) {
+            textToSpeech.stop()
+            textToSpeech.shutdown()
+        }
         super.onDestroy()
     }
 
@@ -218,7 +227,7 @@ class MainActivity : AppCompatActivity() {
 
         val outputChannel = UiOutputChannel(
             onState = { state -> runOnUiThread { appendLog("Output state: $state") } },
-            onSpeak = { text -> runOnUiThread { appendLog("Jarvis: $text") } }
+            onSpeak = { text -> runOnUiThread { speakWithAndroidTextToSpeech(text) } }
         )
 
         return PipelineOrchestrator(
@@ -240,6 +249,44 @@ class MainActivity : AppCompatActivity() {
 
     private fun appendLog(line: String) {
         logText.text = logText.text.toString() + "\n" + line
+    }
+
+    private fun initializeTextToSpeech() {
+        textToSpeech = TextToSpeech(this) { status ->
+            if (status != TextToSpeech.SUCCESS) {
+                isTextToSpeechReady = false
+                appendLog("TTS initialization failed")
+                logger.warn("tts", "Initialization failed", mapOf("status" to status))
+                return@TextToSpeech
+            }
+
+            val languageResult = textToSpeech.setLanguage(Locale.getDefault())
+            isTextToSpeechReady = languageResult != TextToSpeech.LANG_MISSING_DATA &&
+                languageResult != TextToSpeech.LANG_NOT_SUPPORTED
+
+            if (isTextToSpeechReady) {
+                logger.info("tts", "Initialized", mapOf("locale" to Locale.getDefault().toLanguageTag()))
+            } else {
+                appendLog("TTS language not supported on this device")
+                logger.warn("tts", "Language not supported", mapOf("locale" to Locale.getDefault().toLanguageTag()))
+            }
+        }
+    }
+
+    private fun speakWithAndroidTextToSpeech(text: String) {
+        appendLog("Jarvis: $text")
+
+        if (!::textToSpeech.isInitialized || !isTextToSpeechReady) {
+            appendLog("TTS unavailable")
+            return
+        }
+
+        textToSpeech.speak(
+            text,
+            TextToSpeech.QUEUE_FLUSH,
+            null,
+            "jarvis-${System.currentTimeMillis()}"
+        )
     }
 
     private fun setupModelControls() {
