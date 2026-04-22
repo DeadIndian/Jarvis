@@ -5,7 +5,6 @@ import com.jarvis.core.EventBus
 import com.jarvis.core.JarvisState
 import com.jarvis.core.Orchestrator
 import com.jarvis.intent.IntentRouter
-import com.jarvis.llm.LLMRequest
 import com.jarvis.llm.LLMRouter
 import com.jarvis.logging.JarvisLogger
 import com.jarvis.memory.MemoryStore
@@ -136,15 +135,13 @@ class PipelineOrchestrator(
 
             // Step 4: Response Generation
             val spokenText = when {
-                successful.isNotEmpty() -> successful.first().output ?: "Done"
-                else -> {
-                    generateConversationalFallback(
-                        text = text,
-                        failedCount = failed.size,
-                        memoryContext = memoryContext,
-                        requestId = requestId
-                    )
+                intentResult.intent == "SPEAK" -> {
+                    intentResult.entities["text"].orEmpty().ifBlank { "I am here." }
                 }
+
+                successful.isNotEmpty() -> successful.first().output ?: "Done"
+                failed.isNotEmpty() -> "I could not complete that request"
+                else -> "No action was needed"
             }
 
             transitionState(JarvisState.SPEAKING)
@@ -155,7 +152,7 @@ class PipelineOrchestrator(
                 requestId = requestId,
                 input = text,
                 response = spokenText,
-                usedLlm = successful.isEmpty(),
+                usedLlm = intentResult.intent == "SPEAK",
                 memoryMatches = memoryContext.size
             )
 
@@ -200,36 +197,6 @@ class PipelineOrchestrator(
         return results
     }
 
-    private suspend fun generateConversationalFallback(
-        text: String,
-        failedCount: Int,
-        memoryContext: List<String>,
-        requestId: String
-    ): String {
-        val router = llmRouter ?: return if (failedCount > 0) {
-            "I could not complete that request"
-        } else {
-            "No action was needed"
-        }
-
-        val prompt = buildPrompt(text = text, failedCount = failedCount, memoryContext = memoryContext)
-        val response = runCatching {
-            router.complete(LLMRequest(prompt = prompt, allowCloudFallback = allowCloudFallback))
-        }.getOrElse {
-            logger.warn("llm", "LLM fallback failed", mapOf("requestId" to requestId))
-            return if (failedCount > 0) "I could not complete that request" else "No action was needed"
-        }
-
-        logger.info(
-            "llm",
-            "Generated conversational fallback",
-            mapOf("requestId" to requestId, "provider" to response.provider)
-        )
-        return response.text.ifBlank {
-            if (failedCount > 0) "I could not complete that request" else "No action was needed"
-        }
-    }
-
     private suspend fun persistInteraction(
         requestId: String,
         input: String,
@@ -252,29 +219,6 @@ class PipelineOrchestrator(
             store.put(key, value)
         }.onFailure {
             logger.warn("memory", "Failed to persist interaction", mapOf("requestId" to requestId))
-        }
-    }
-
-    private fun buildPrompt(text: String, failedCount: Int, memoryContext: List<String>): String {
-        val memorySection = if (memoryContext.isEmpty()) {
-            "No relevant memory context."
-        } else {
-            memoryContext.joinToString(separator = "\n---\n") { it.take(MAX_MEMORY_CHARS) }
-        }
-
-        val status = if (failedCount > 0) {
-            "The action plan failed for $failedCount step(s)."
-        } else {
-            "No direct action matched this request."
-        }
-
-        return buildString {
-            appendLine("You are Jarvis, a concise assistant.")
-            appendLine(status)
-            appendLine("User request: $text")
-            appendLine("Relevant memory context:")
-            appendLine(memorySection)
-            appendLine("Respond with one short helpful sentence.")
         }
     }
 

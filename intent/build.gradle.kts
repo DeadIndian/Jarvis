@@ -23,9 +23,8 @@ android {
 
 dependencies {
     implementation(project(":core"))
-    implementation(project(":llm"))
-    implementation(project(":skills"))
     implementation(project(":logging"))
-    implementation("org.json:json:20240303")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
+
+    testImplementation(kotlin("test"))
 }

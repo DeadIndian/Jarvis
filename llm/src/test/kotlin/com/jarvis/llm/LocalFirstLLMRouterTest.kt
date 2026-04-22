@@ -42,7 +42,7 @@ class LocalFirstLLMRouterTest {
         val response = router.complete(LLMRequest(prompt = "hello", allowCloudFallback = false))
 
         assertEquals("none", response.provider)
-        assertEquals("I could not complete that request right now", response.text)
+        assertEquals("Error: Local LLM failed to respond: offline", response.text)
         assertEquals(1, local.calls)
         assertEquals(0, cloud.calls)
     }

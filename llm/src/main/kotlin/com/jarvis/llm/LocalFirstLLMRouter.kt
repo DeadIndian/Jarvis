@@ -20,9 +20,9 @@ class LocalFirstLLMRouter(
         val prompt = request.prompt.trim()
         require(prompt.isNotBlank()) { "Prompt must not be blank" }
 
-        val local = tryLocal(prompt)
-        if (local != null) {
-            return local
+        val localAttempt = tryLocal(prompt)
+        if (localAttempt.response != null) {
+            return localAttempt.response
         }
 
         if (request.allowCloudFallback) {
@@ -35,7 +35,13 @@ class LocalFirstLLMRouter(
         val errorMessage = if (localProvider == null) {
             "No local LLM provider initialized (check if model is downloaded and selected)"
         } else {
-            "Local LLM failed to respond (check logs or try a different model)"
+            buildString {
+                append("Local LLM failed to respond")
+                localAttempt.errorInfo?.let {
+                    append(": ")
+                    append(it)
+                }
+            }
         }
 
         logger.warn(
@@ -49,10 +55,10 @@ class LocalFirstLLMRouter(
         )
     }
 
-    private suspend fun tryLocal(prompt: String): LLMResponse? {
-        val provider = localProvider ?: return null
+    private suspend fun tryLocal(prompt: String): LocalAttemptResult {
+        val provider = localProvider ?: return LocalAttemptResult()
         val startedAt = System.nanoTime()
-        
+
         var caughtException: Throwable? = null
         val output = withTimeoutOrNull(localTimeoutMs) {
             try {
@@ -66,11 +72,13 @@ class LocalFirstLLMRouter(
 
         return if (!output.isNullOrBlank()) {
             logger.info("llm", "Local LLM request completed", mapOf("provider" to provider.name, "latencyMs" to latencyMs))
-            LLMResponse(text = output, provider = provider.name)
+            LocalAttemptResult(
+                response = LLMResponse(text = output, provider = provider.name)
+            )
         } else {
             val errorInfo = caughtException?.message ?: "Timeout after ${latencyMs}ms"
             logger.warn("llm", "Local LLM request failed", mapOf("provider" to provider.name, "latencyMs" to latencyMs, "error" to errorInfo))
-            null
+            LocalAttemptResult(errorInfo = errorInfo)
         }
     }
 
@@ -90,4 +98,9 @@ class LocalFirstLLMRouter(
             null
         }
     }
+
+    private data class LocalAttemptResult(
+        val response: LLMResponse? = null,
+        val errorInfo: String? = null
+    )
 }
