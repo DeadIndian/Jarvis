@@ -14,6 +14,13 @@ class SimplePlanner : Planner {
                     )
                 )
             }
+            
+            "CONVERSATIONAL_RESPONSE" -> {
+                // This "intent" means the LLM already generated a text response.
+                // We can wrap it in a pseudo-skill or handle it specially in orchestrator.
+                // For simplicity, we'll return an empty plan and let orchestrator use the entity.
+                Plan(emptyList())
+            }
 
             else -> Plan(emptyList())
         }

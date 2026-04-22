@@ -88,7 +88,8 @@ dependencies {
     implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.activity:activity-ktx:1.9.3")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.6")
-    implementation("com.google.mediapipe:tasks-genai:0.10.27")
+    // Updated to latest version which supports .litertlm format used by Gemma 3/4
+    implementation("com.google.mediapipe:tasks-genai:0.10.33")
 
     implementation(project(":core"))
     implementation(project(":input"))

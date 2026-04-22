@@ -40,6 +40,27 @@ This is a foundation MVP intended for rapid iteration toward full voice runtime,
 - Send text command (example: open WhatsApp)
 - Trigger Power Hold, House Party, Wake Word, Timeout transitions
 
+## Compare Jarvis local vs Google on-device
+
+Jarvis now includes an in-app LLM backend selector so you can compare output quality and latency:
+
+- `Jarvis LiteRT (current)` uses your downloaded `.litertlm/.task` model artifacts.
+- `Google Gemini Nano via AICore` uses ML Kit Prompt API on top of Android AICore.
+- `Jarvis LiteRT + Gemini cloud fallback` keeps your current local-first flow with cloud fallback.
+- `Gemini cloud only` routes directly to the cloud provider.
+
+How to compare quickly:
+
+1. Open `LLM Backend` in the app and pick one mode.
+2. Tap `Apply Backend`.
+3. Send the same prompt in each mode and compare `Jarvis:` output + response behavior in logs.
+
+Notes for Google on-device mode:
+
+- It only works on supported AICore/Gemini Nano devices.
+- If status is not ready (`UNAVAILABLE`, `DOWNLOADABLE`, `DOWNLOADING`), Jarvis logs that state and returns no local AICore output for that request.
+- For best reliability, keep device online after setup so AICore can finish initialization and model/config downloads.
+
 ## On-device model setup (step by step)
 
 Jarvis uses LiteRT local model artifacts for on-device inference.

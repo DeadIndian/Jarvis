@@ -9,6 +9,7 @@ import java.nio.file.Paths
 import kotlin.io.path.exists
 import kotlin.io.path.isRegularFile
 import kotlin.io.path.name
+import kotlin.streams.asSequence
 
 class MarkdownFileMemoryStore(
     private val baseDirectory: Path = Paths.get(System.getProperty("user.home"), ".jarvis", "memory"),
@@ -17,7 +18,7 @@ class MarkdownFileMemoryStore(
     override suspend fun put(key: String, value: String) {
         val target = pathForKey(key)
         Files.createDirectories(baseDirectory)
-        Files.writeString(target, value, StandardCharsets.UTF_8)
+        target.toFile().writeText(value, StandardCharsets.UTF_8)
         logger.info("memory", "Memory item persisted", mapOf("key" to normalizeKey(key)))
     }
 
@@ -26,7 +27,7 @@ class MarkdownFileMemoryStore(
         if (!target.exists()) {
             return null
         }
-        return Files.readString(target, StandardCharsets.UTF_8)
+        return target.toFile().readText(StandardCharsets.UTF_8)
     }
 
     override suspend fun search(query: String, limit: Int): List<String> {
@@ -41,10 +42,10 @@ class MarkdownFileMemoryStore(
 
         val tokens = normalizedQuery.split(' ').filter { it.isNotBlank() }.toSet()
         val ranked = Files.list(baseDirectory).use { paths ->
-            paths.iterator().asSequence()
+            paths.asSequence()
                 .filter { it.isRegularFile() && it.name.endsWith(MARKDOWN_SUFFIX) }
                 .mapNotNull { file ->
-                    val content = Files.readString(file, StandardCharsets.UTF_8)
+                    val content = file.toFile().readText(StandardCharsets.UTF_8)
                     val combinedText = normalizeSearchText(file.name.removeSuffix(MARKDOWN_SUFFIX) + " " + content)
                     val score = tokens.count { token -> combinedText.contains(token) }
                     if (score <= 0) {

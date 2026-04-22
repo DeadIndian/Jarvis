@@ -8,5 +8,6 @@ sealed class Event {
     data class HousePartyToggle(val enabled: Boolean) : Event()
     data object TimeoutElapsed : Event()
     data class SkillResult(val skill: String, val result: String) : Event()
+    data class StateChanged(val state: JarvisState) : Event()
     data class Error(val message: String, val cause: Throwable? = null) : Event()
 }

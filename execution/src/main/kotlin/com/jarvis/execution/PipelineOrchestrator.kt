@@ -13,7 +13,11 @@ import com.jarvis.output.OutputChannel
 import com.jarvis.planner.Planner
 import java.time.Instant
 import java.util.UUID
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 class PipelineOrchestrator(
     private val eventBus: EventBus,
@@ -29,26 +33,30 @@ class PipelineOrchestrator(
 ) : Orchestrator {
     private var state: JarvisState = JarvisState.IDLE
     private val registeredSkills = mutableSetOf<String>()
+    private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+    
     private val allowedTransitions = mapOf(
-        JarvisState.IDLE to setOf(JarvisState.BARN_DOOR, JarvisState.HOUSE_PARTY, JarvisState.ACTIVE),
-        JarvisState.BARN_DOOR to setOf(JarvisState.ACTIVE, JarvisState.IDLE, JarvisState.HOUSE_PARTY),
-        JarvisState.ACTIVE to setOf(JarvisState.IDLE, JarvisState.HOUSE_PARTY),
-        JarvisState.HOUSE_PARTY to setOf(JarvisState.ACTIVE, JarvisState.IDLE)
+        JarvisState.IDLE to setOf(JarvisState.BARN_DOOR, JarvisState.HOUSE_PARTY, JarvisState.ACTIVE, JarvisState.THINKING),
+        JarvisState.BARN_DOOR to setOf(JarvisState.ACTIVE, JarvisState.IDLE, JarvisState.HOUSE_PARTY, JarvisState.THINKING),
+        JarvisState.ACTIVE to setOf(JarvisState.IDLE, JarvisState.HOUSE_PARTY, JarvisState.THINKING),
+        JarvisState.THINKING to setOf(JarvisState.SPEAKING, JarvisState.IDLE, JarvisState.ACTIVE),
+        JarvisState.SPEAKING to setOf(JarvisState.IDLE, JarvisState.ACTIVE, JarvisState.THINKING),
+        JarvisState.HOUSE_PARTY to setOf(JarvisState.ACTIVE, JarvisState.IDLE, JarvisState.THINKING)
     )
 
     fun currentState(): JarvisState = state
 
     override fun dispatch(event: Event) {
         when (event) {
-            is Event.VoiceInput -> processInput(event.text)
-            is Event.TextInput -> processInput(event.text)
+            is Event.VoiceInput -> scope.launch { processInput(event.text) }
+            is Event.TextInput -> scope.launch { processInput(event.text) }
             is Event.WakeWordDetected -> {
-                if (state == JarvisState.HOUSE_PARTY) {
+                if (state == JarvisState.HOUSE_PARTY || state == JarvisState.IDLE) {
                     transitionState(JarvisState.ACTIVE)
                 } else {
                     logger.warn(
                         "state",
-                        "Wake word ignored outside HOUSE_PARTY",
+                        "Wake word ignored",
                         mapOf("currentState" to state.name)
                     )
                 }
@@ -73,6 +81,7 @@ class PipelineOrchestrator(
                 eventBus.publish(event)
                 logger.error("orchestrator", event.message, event.cause)
             }
+            is Event.StateChanged -> Unit
         }
     }
 
@@ -91,6 +100,7 @@ class PipelineOrchestrator(
         }
         this.state = state
         logger.info("state", "State changed", mapOf("state" to state.name))
+        eventBus.publish(Event.StateChanged(state))
     }
 
     override fun registerSkill(skillName: String) {
@@ -98,42 +108,49 @@ class PipelineOrchestrator(
         logger.info("skills", "Skill registered", mapOf("skill" to skillName))
     }
 
-    private fun processInput(text: String) {
+    private suspend fun processInput(text: String) {
         val requestId = UUID.randomUUID().toString()
-        if (state == JarvisState.IDLE) {
-            transitionState(JarvisState.ACTIVE)
-        }
+        
+        transitionState(JarvisState.THINKING)
 
         logger.info(
             "pipeline",
             "Input processing started",
             mapOf("requestId" to requestId, "textLength" to text.length, "state" to state.name)
         )
-        outputChannel.showThinking()
-        val memoryContext = runBlocking { retrieveMemoryContext(text, requestId) }
-        val intentResult = runBlocking { intentRouter.parse(text) }
-        val plan = runBlocking { planner.createPlan(intentResult.intent, intentResult.entities) }
+        
+        try {
+            outputChannel.showThinking()
+            val memoryContext = retrieveMemoryContext(text, requestId)
+            
+            // Step 1: Intent Parsing
+            val intentResult = intentRouter.parse(text)
+            
+            // Step 2: Planning
+            val plan = planner.createPlan(intentResult.intent, intentResult.entities)
 
-        val results = runBlocking { executionEngine.execute(plan) }
-        val successful = results.filter { it.success }
-        val failed = results.filterNot { it.success }
+            // Step 3: Execution
+            val results = executionEngine.execute(plan)
+            val successful = results.filter { it.success }
+            val failed = results.filterNot { it.success }
 
-        val spokenText = when {
-            successful.isNotEmpty() -> successful.first().output ?: "Done"
-            else -> runBlocking {
-                generateConversationalFallback(
-                    text = text,
-                    failedCount = failed.size,
-                    memoryContext = memoryContext,
-                    requestId = requestId
-                )
+            // Step 4: Response Generation
+            val spokenText = when {
+                successful.isNotEmpty() -> successful.first().output ?: "Done"
+                else -> {
+                    generateConversationalFallback(
+                        text = text,
+                        failedCount = failed.size,
+                        memoryContext = memoryContext,
+                        requestId = requestId
+                    )
+                }
             }
-        }
 
-        outputChannel.showSpeaking()
-        outputChannel.speak(spokenText)
+            transitionState(JarvisState.SPEAKING)
+            outputChannel.showSpeaking()
+            outputChannel.speak(spokenText)
 
-        runBlocking {
             persistInteraction(
                 requestId = requestId,
                 input = text,
@@ -141,14 +158,28 @@ class PipelineOrchestrator(
                 usedLlm = successful.isEmpty(),
                 memoryMatches = memoryContext.size
             )
-        }
 
-        eventBus.publish(Event.SkillResult(skill = "pipeline", result = spokenText))
-        logger.info(
-            "pipeline",
-            "Input processing completed",
-            mapOf("requestId" to requestId, "successfulSteps" to successful.size, "failedSteps" to failed.size)
-        )
+            eventBus.publish(Event.SkillResult(skill = "pipeline", result = spokenText))
+            logger.info(
+                "pipeline",
+                "Input processing completed",
+                mapOf("requestId" to requestId, "successfulSteps" to successful.size, "failedSteps" to failed.size)
+            )
+        } catch (e: Exception) {
+            logger.error("pipeline", "Input processing failed", e)
+            transitionState(JarvisState.SPEAKING)
+            outputChannel.showSpeaking()
+            outputChannel.speak("I encountered an error while processing your request.")
+            eventBus.publish(Event.Error("Pipeline failure", e))
+        } finally {
+            // Auto-idle after a delay to clear the UI/notification
+            scope.launch {
+                delay(10000) // 10 seconds of visibility for the final state
+                if (state == JarvisState.SPEAKING || state == JarvisState.THINKING) {
+                    transitionState(JarvisState.IDLE)
+                }
+            }
+        }
     }
 
     private suspend fun retrieveMemoryContext(text: String, requestId: String): List<String> {

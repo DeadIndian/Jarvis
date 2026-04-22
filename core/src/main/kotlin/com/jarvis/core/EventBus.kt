@@ -1,5 +1,7 @@
 package com.jarvis.core
 
+import java.util.concurrent.CopyOnWriteArraySet
+
 fun interface EventListener {
     fun onEvent(event: Event)
 }
@@ -10,13 +12,13 @@ interface EventBus {
 }
 
 class InMemoryEventBus : EventBus {
-    private val listeners = mutableSetOf<EventListener>()
+    private val listeners = CopyOnWriteArraySet<EventListener>()
 
     override fun publish(event: Event) {
         listeners.forEach { it.onEvent(event) }
     }
 
     override fun subscribe(listener: EventListener) {
-        listeners += listener
+        listeners.add(listener)
     }
 }

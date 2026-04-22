@@ -13,7 +13,7 @@ class LocalFirstLLMRouter(
     private val localProvider: LLMProvider? = null,
     private val cloudProvider: LLMProvider? = null,
     private val logger: JarvisLogger = NoOpJarvisLogger,
-    private val localTimeoutMs: Long = 1200L,
+    private val localTimeoutMs: Long = 30000L, // Increased timeout for local inference
     private val cloudTimeoutMs: Long = 2500L
 ) : LLMRouter {
     override suspend fun complete(request: LLMRequest): LLMResponse {
@@ -32,13 +32,19 @@ class LocalFirstLLMRouter(
             }
         }
 
+        val errorMessage = if (localProvider == null) {
+            "No local LLM provider initialized (check if model is downloaded and selected)"
+        } else {
+            "Local LLM failed to respond (check logs or try a different model)"
+        }
+
         logger.warn(
             stage = "llm",
             message = "No provider could complete request",
-            data = mapOf("allowCloudFallback" to request.allowCloudFallback)
+            data = mapOf("allowCloudFallback" to request.allowCloudFallback, "error" to errorMessage)
         )
         return LLMResponse(
-            text = "I could not complete that request right now",
+            text = "Error: $errorMessage",
             provider = "none"
         )
     }
@@ -46,8 +52,15 @@ class LocalFirstLLMRouter(
     private suspend fun tryLocal(prompt: String): LLMResponse? {
         val provider = localProvider ?: return null
         val startedAt = System.nanoTime()
+        
+        var caughtException: Throwable? = null
         val output = withTimeoutOrNull(localTimeoutMs) {
-            runCatching { provider.complete(prompt) }.getOrNull()?.trim().orEmpty()
+            try {
+                provider.complete(prompt).trim().ifBlank { null }
+            } catch (e: Exception) {
+                caughtException = e
+                null
+            }
         }
         val latencyMs = (System.nanoTime() - startedAt) / 1_000_000
 
@@ -55,7 +68,8 @@ class LocalFirstLLMRouter(
             logger.info("llm", "Local LLM request completed", mapOf("provider" to provider.name, "latencyMs" to latencyMs))
             LLMResponse(text = output, provider = provider.name)
         } else {
-            logger.warn("llm", "Local LLM request failed", mapOf("provider" to provider.name, "latencyMs" to latencyMs))
+            val errorInfo = caughtException?.message ?: "Timeout after ${latencyMs}ms"
+            logger.warn("llm", "Local LLM request failed", mapOf("provider" to provider.name, "latencyMs" to latencyMs, "error" to errorInfo))
             null
         }
     }
