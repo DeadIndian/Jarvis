@@ -92,12 +92,8 @@ class LiteRtOnDeviceModelManager(
     override suspend fun getActiveModelId(): String = withContext(Dispatchers.IO) {
         val supported = listModels().map { it.id }
         val persisted = preferences.getString(KEY_ACTIVE_MODEL, null)
-        val resolved = if (persisted != null && supported.contains(persisted)) {
-            persisted
-        } else {
-            supported.firstOrNull() ?: throw IllegalStateException("No models available")
-        }
-        if (persisted != resolved) {
+        val resolved = if (persisted != null && supported.contains(persisted)) persisted else PRIMARY_MODEL_ID
+        if (persisted != resolved && supported.contains(resolved)) {
             preferences.edit().putString(KEY_ACTIVE_MODEL, resolved).apply()
         }
         resolved
@@ -115,10 +111,10 @@ class LiteRtOnDeviceModelManager(
     override suspend fun downloadModel(modelId: String, onProgress: (Int) -> Unit) {
         withContext(Dispatchers.IO) {
             ensureModelDirectory()
-            val targetId = if (modelId == DEEPSEEK_MODEL_ID) DEFAULT_BASE_MODEL_ID else modelId
+            val targetId = if (modelId == DEEPSEEK_MODEL_ID) PRIMARY_MODEL_ID else modelId
             val catalog = catalogById()[targetId]
                 ?: throw IllegalArgumentException(
-                    "No downloadable artifact mapped for '$targetId'. Add a .task/.litertlm file to ${modelDirectory.absolutePath}."
+                    "No downloadable artifact mapped for '$targetId'. Add a .bin/.task/.litertlm file to ${modelDirectory.absolutePath}."
                 )
 
             onProgress(1)
@@ -161,7 +157,7 @@ class LiteRtOnDeviceModelManager(
             } else {
                 val artifact = resolveArtifactById(modelId)
                     ?: throw IllegalStateException(
-                        "Active model '$modelId' is missing. Add a .task/.litertlm artifact and refresh."
+                        "Active model '$modelId' is missing. Add a .bin/.task/.litertlm artifact and refresh."
                     )
                 bridge.complete(artifact.file.absolutePath, prompt)
             }
@@ -190,17 +186,17 @@ class LiteRtOnDeviceModelManager(
 
     private fun resolveDeepSeekBackingArtifact(): ModelArtifact {
         val discovered = discoverLocalArtifacts()
-        return discovered.firstOrNull { it.id == DEFAULT_BASE_MODEL_ID }
+        return discovered.firstOrNull { it.id == PRIMARY_MODEL_ID }
             ?: discovered.firstOrNull()
             ?: throw IllegalStateException(
-                "No LiteRT model is installed. Download '$DEFAULT_BASE_MODEL_ID' first."
+                "No LiteRT model is installed. Download '$PRIMARY_MODEL_ID' first."
             )
     }
 
     private fun discoverLocalArtifacts(): List<ModelArtifact> {
         ensureModelDirectory()
         val files = modelDirectory.listFiles().orEmpty()
-            .filter { it.isFile && (it.extension.equals("task", true) || it.extension.equals("litertlm", true)) }
+            .filter { it.isFile && (it.extension.equals("task", true) || it.extension.equals("litertlm", true) || it.extension.equals("bin", true)) }
 
         if (files.isEmpty()) {
             return emptyList()
@@ -222,29 +218,48 @@ class LiteRtOnDeviceModelManager(
     }
 
     private fun catalogById(): Map<String, ModelCatalogEntry> {
-        return mapOf(
-            DEFAULT_BASE_MODEL_ID to ModelCatalogEntry(
+        val entries = mutableListOf(
+            PRIMARY_MODEL_ID to ModelCatalogEntry(
+                id = PRIMARY_MODEL_ID,
+                title = PRIMARY_MODEL_TITLE,
+                fileName = PRIMARY_MODEL_FILE_NAME,
+                downloadUrl = PRIMARY_MODEL_URL,
+                sortOrder = 5
+            ),
+            GEMMA_4_E4B_MODEL_ID to ModelCatalogEntry(
+                id = GEMMA_4_E4B_MODEL_ID,
+                title = GEMMA_4_E4B_MODEL_TITLE,
+                fileName = GEMMA_4_E4B_MODEL_FILE_NAME,
+                downloadUrl = GEMMA_4_E4B_MODEL_URL,
+                sortOrder = 15
+            ),
+            QWEN_1P5B_MODEL_ID to ModelCatalogEntry(
+                id = QWEN_1P5B_MODEL_ID,
+                title = QWEN_1P5B_MODEL_TITLE,
+                fileName = QWEN_1P5B_MODEL_FILE_NAME,
+                downloadUrl = QWEN_1P5B_MODEL_URL,
+                sortOrder = 20
+            )
+        )
+
+        if (huggingFaceToken.isNotBlank()) {
+            entries += DEFAULT_BASE_MODEL_ID to ModelCatalogEntry(
                 id = DEFAULT_BASE_MODEL_ID,
                 title = DEFAULT_BASE_MODEL_TITLE,
                 fileName = DEFAULT_BASE_MODEL_FILE_NAME,
                 downloadUrl = DEFAULT_BASE_MODEL_URL,
                 sortOrder = 10
-            ),
-            GEMMA4_E2B_MODEL_ID to ModelCatalogEntry(
-                id = GEMMA4_E2B_MODEL_ID,
-                title = GEMMA4_E2B_MODEL_TITLE,
-                fileName = GEMMA4_E2B_MODEL_FILE_NAME,
-                downloadUrl = GEMMA4_E2B_MODEL_URL,
-                sortOrder = 20
-            ),
-            GEMMA4_E4B_MODEL_ID to ModelCatalogEntry(
-                id = GEMMA4_E4B_MODEL_ID,
-                title = GEMMA4_E4B_MODEL_TITLE,
-                fileName = GEMMA4_E4B_MODEL_FILE_NAME,
-                downloadUrl = GEMMA4_E4B_MODEL_URL,
-                sortOrder = 30
             )
-        )
+            entries += SNAPDRAGON_OPT_MODEL_ID to ModelCatalogEntry(
+                id = SNAPDRAGON_OPT_MODEL_ID,
+                title = SNAPDRAGON_OPT_MODEL_TITLE,
+                fileName = SNAPDRAGON_OPT_MODEL_FILE_NAME,
+                downloadUrl = SNAPDRAGON_OPT_MODEL_URL,
+                sortOrder = 12
+            )
+        }
+
+        return entries.toMap()
     }
 
     private fun resolveModelFile(fileName: String): File {
@@ -285,8 +300,8 @@ class LiteRtOnDeviceModelManager(
                 ?: connection.inputStream?.bufferedReader()?.use { it.readText() }
                 ?: "no response body"
             val hint = when (code) {
-                401, 403 -> "This model requires Hugging Face authentication or license acceptance. Set JARVIS_HF_TOKEN or place a .litertlm/.task file in ${modelDirectory.absolutePath}."
-                404 -> "Configured model artifact was not found. Check the model URL and filename."
+                401, 403 -> "Authentication required for this model. Add JARVIS_HF_TOKEN and ensure license access is accepted on Hugging Face."
+                404 -> "Model artifact not found at configured URL."
                 else -> "Model download failed with HTTP $code"
             }
             throw IllegalStateException("$hint Response: $responseBody")
@@ -356,19 +371,30 @@ class LiteRtOnDeviceModelManager(
         private const val KEY_ACTIVE_MODEL = "active_model"
         private const val DEEPSEEK_MODEL_ID = "deepseek-r1-distill-qwen-1.5b"
         private const val DEEPSEEK_TITLE = "DeepSeek-style profile (LiteRT local runtime)"
+
+        private const val PRIMARY_MODEL_ID = "gemma-4-e2b-it"
+        private const val PRIMARY_MODEL_TITLE = "Gemma 4 E2B IT (LiteRT, fast)"
+        private const val PRIMARY_MODEL_FILE_NAME = "gemma-4-E2B-it.litertlm"
+        private const val PRIMARY_MODEL_URL = "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm"
+
         private const val DEFAULT_BASE_MODEL_ID = "gemma-3-1b-it-q4"
         private const val DEFAULT_BASE_MODEL_TITLE = "Gemma 3 1B IT (LiteRT .litertlm)"
         private const val DEFAULT_BASE_MODEL_FILE_NAME = "Gemma3-1B-IT_multi-prefill-seq_q4_ekv4096.litertlm"
         private const val DEFAULT_BASE_MODEL_URL = "https://huggingface.co/litert-community/Gemma3-1B-IT/resolve/main/Gemma3-1B-IT_multi-prefill-seq_q4_ekv4096.litertlm"
 
-        private const val GEMMA4_E2B_MODEL_ID = "gemma-4-e2b-it"
-        private const val GEMMA4_E2B_MODEL_TITLE = "Gemma 4 E2B IT (LiteRT-LM .litertlm)"
-        private const val GEMMA4_E2B_MODEL_FILE_NAME = "gemma-4-E2B-it.litertlm"
-        private const val GEMMA4_E2B_MODEL_URL = "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm"
+        private const val SNAPDRAGON_OPT_MODEL_ID = "gemma-3-1b-it-q4-sm8650"
+        private const val SNAPDRAGON_OPT_MODEL_TITLE = "Gemma 4 E2B IT (Snapdragon profile)"
+        private const val SNAPDRAGON_OPT_MODEL_FILE_NAME = "gemma-4-E2B-it.litertlm"
+        private const val SNAPDRAGON_OPT_MODEL_URL = "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm"
 
-        private const val GEMMA4_E4B_MODEL_ID = "gemma-4-e4b-it"
-        private const val GEMMA4_E4B_MODEL_TITLE = "Gemma 4 E4B IT (LiteRT-LM .litertlm)"
-        private const val GEMMA4_E4B_MODEL_FILE_NAME = "gemma-4-E4B-it.litertlm"
-        private const val GEMMA4_E4B_MODEL_URL = "https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm/resolve/main/gemma-4-E4B-it.litertlm"
+        private const val GEMMA_4_E4B_MODEL_ID = "gemma-4-e4b-it"
+        private const val GEMMA_4_E4B_MODEL_TITLE = "Gemma 4 E4B IT (LiteRT, best quality)"
+        private const val GEMMA_4_E4B_MODEL_FILE_NAME = "gemma-4-E4B-it.litertlm"
+        private const val GEMMA_4_E4B_MODEL_URL = "https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm/resolve/main/gemma-4-E4B-it.litertlm"
+
+        private const val QWEN_1P5B_MODEL_ID = "qwen-2.5-1.5b-instruct"
+        private const val QWEN_1P5B_MODEL_TITLE = "Qwen 2.5 1.5B Instruct (LiteRT)"
+        private const val QWEN_1P5B_MODEL_FILE_NAME = "Qwen2.5-1.5B-Instruct_multi-prefill-seq_q8_ekv4096.litertlm"
+        private const val QWEN_1P5B_MODEL_URL = "https://huggingface.co/litert-community/Qwen2.5-1.5B-Instruct/resolve/main/Qwen2.5-1.5B-Instruct_multi-prefill-seq_q8_ekv4096.litertlm"
     }
 }

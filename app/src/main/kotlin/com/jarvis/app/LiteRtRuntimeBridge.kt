@@ -14,15 +14,15 @@ internal class LiteRtRuntimeBridge(
     fun complete(modelPath: String, prompt: String): String {
         require(prompt.isNotBlank()) { "Prompt must not be blank" }
         val client = clients[modelPath] ?: createAndCacheClient(modelPath)
+        
         return try {
             val response = client.generateResponse(prompt)
-            val result = response.orEmpty()
-            if (result.isBlank()) {
-                Log.w(tag, "Empty response from generateResponse()")
-            }
-            result
+            response.orEmpty()
         } catch (e: Exception) {
-            Log.e(tag, "Inference error", e)
+            Log.e(tag, "Inference error on GPU", e)
+            // Clear the failed client
+            clients.remove(modelPath)
+            runCatching { client.close() }
             ""
         }
     }
@@ -39,11 +39,15 @@ internal class LiteRtRuntimeBridge(
                 return existing
             }
 
+            Log.i(tag, "Creating client for $modelPath with backend: GPU")
+            
             val options = LlmInference.LlmInferenceOptions.builder()
                 .setModelPath(modelPath)
                 .setMaxTokens(DEFAULT_MAX_TOKENS)
                 .setMaxTopK(DEFAULT_TOP_K)
+                .setPreferredBackend(LlmInference.Backend.GPU)
                 .build()
+                
             val created = LlmInference.createFromOptions(context, options)
             clients[modelPath] = created
             return created
@@ -51,11 +55,7 @@ internal class LiteRtRuntimeBridge(
     }
 
     private companion object {
-        // Reduced for Gemma 3 1B:  typical output 100-256 tokens
         private const val DEFAULT_MAX_TOKENS = 256
-        // Top-K should be <= vocabulary; safer values for small models
         private const val DEFAULT_TOP_K = 40
-        // Temperature for deterministic output
-        private const val DEFAULT_TEMPERATURE = 0.7f
     }
 }

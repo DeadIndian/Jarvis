@@ -338,8 +338,10 @@ class MainActivity : AppCompatActivity() {
     private fun resolveModelFileName(modelId: String): String {
         return when (modelId) {
             "gemma-3-1b-it-q4" -> "Gemma3-1B-IT_multi-prefill-seq_q4_ekv4096.litertlm"
+            "gemma-3-1b-it-q4-sm8650" -> "gemma-4-E2B-it.litertlm"
             "gemma-4-e2b-it" -> "gemma-4-E2B-it.litertlm"
             "gemma-4-e4b-it" -> "gemma-4-E4B-it.litertlm"
+            "qwen-2.5-1.5b-instruct" -> "Qwen2.5-1.5B-Instruct_multi-prefill-seq_q8_ekv4096.litertlm"
             else -> "$modelId.litertlm"
         }
     }

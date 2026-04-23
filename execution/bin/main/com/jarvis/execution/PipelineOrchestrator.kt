@@ -6,6 +6,7 @@ import com.jarvis.core.JarvisState
 import com.jarvis.core.Orchestrator
 import com.jarvis.intent.IntentRouter
 import com.jarvis.llm.LLMRouter
+import com.jarvis.llm.LLMRequest
 import com.jarvis.logging.JarvisLogger
 import com.jarvis.memory.MemoryStore
 import com.jarvis.output.OutputChannel
@@ -125,23 +126,33 @@ class PipelineOrchestrator(
             // Step 1: Intent Parsing
             val intentResult = intentRouter.parse(text)
             
-            // Step 2: Planning
-            val plan = planner.createPlan(intentResult.intent, intentResult.entities)
+            val spokenText = if (intentResult.intent == "UNKNOWN") {
+                // Fallback to AI model (LLM) when no intent is matched
+                logger.info("pipeline", "No intent matched, falling back to LLM", mapOf("requestId" to requestId))
+                val llmRequest = LLMRequest(
+                    prompt = buildPromptWithContext(text, memoryContext),
+                    allowCloudFallback = allowCloudFallback
+                )
+                val llmResponse = llmRouter?.complete(llmRequest)
+                llmResponse?.text ?: "I'm sorry, I don't know how to help with that."
+            } else {
+                // Step 2: Planning
+                val plan = planner.createPlan(intentResult.intent, intentResult.entities)
 
-            // Step 3: Execution
-            val results = executionEngine.execute(plan)
-            val successful = results.filter { it.success }
-            val failed = results.filterNot { it.success }
+                // Step 3: Execution
+                val results = executionEngine.execute(plan)
+                val successful = results.filter { it.success }
+                val failed = results.filterNot { it.success }
 
-            // Step 4: Response Generation
-            val spokenText = when {
-                intentResult.intent == "SPEAK" -> {
-                    intentResult.entities["text"].orEmpty().ifBlank { "I am here." }
+                // Step 4: Response Generation
+                when {
+                    intentResult.intent == "SPEAK" -> {
+                        intentResult.entities["text"].orEmpty().ifBlank { "I am here." }
+                    }
+                    successful.isNotEmpty() -> successful.first().output ?: "Done"
+                    failed.isNotEmpty() -> "I could not complete that request"
+                    else -> "No action was needed"
                 }
-
-                successful.isNotEmpty() -> successful.first().output ?: "Done"
-                failed.isNotEmpty() -> "I could not complete that request"
-                else -> "No action was needed"
             }
 
             transitionState(JarvisState.SPEAKING)
@@ -152,7 +163,7 @@ class PipelineOrchestrator(
                 requestId = requestId,
                 input = text,
                 response = spokenText,
-                usedLlm = intentResult.intent == "SPEAK",
+                usedLlm = intentResult.intent == "UNKNOWN" || intentResult.intent == "SPEAK",
                 memoryMatches = memoryContext.size
             )
 
@@ -160,7 +171,7 @@ class PipelineOrchestrator(
             logger.info(
                 "pipeline",
                 "Input processing completed",
-                mapOf("requestId" to requestId, "successfulSteps" to successful.size, "failedSteps" to failed.size)
+                mapOf("requestId" to requestId)
             )
         } catch (e: Exception) {
             logger.error("pipeline", "Input processing failed", e)
@@ -177,6 +188,11 @@ class PipelineOrchestrator(
                 }
             }
         }
+    }
+
+    private fun buildPromptWithContext(input: String, context: List<String>): String {
+        if (context.isEmpty()) return input
+        return "Context:\n${context.joinToString("\n")}\n\nUser: $input\nJarvis:"
     }
 
     private suspend fun retrieveMemoryContext(text: String, requestId: String): List<String> {
