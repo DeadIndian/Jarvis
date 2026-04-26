@@ -1,8 +1,20 @@
 package com.jarvis.intent
 
+import java.util.Calendar
+
 class RuleBasedIntentRouter : IntentRouter {
     override suspend fun parse(input: String): IntentResult {
         val normalized = input.lowercase().trim()
+        val helpIntent = parseHelpIntent(normalized)
+        if (helpIntent != null) {
+            return helpIntent
+        }
+
+        val currentTime = parseCurrentTime(normalized)
+        if (currentTime != null) {
+            return currentTime
+        }
+
         val alarmTimer = parseAlarmTimer(normalized)
         if (alarmTimer != null) {
             return alarmTimer
@@ -31,6 +43,34 @@ class RuleBasedIntentRouter : IntentRouter {
         }
     }
 
+    private fun parseHelpIntent(normalized: String): IntentResult? {
+        val isDirectQuery = normalized == "help" || normalized == "jarvis help"
+        val hasHelpPattern = PredefinedCommandCatalog.helpIntentPhrases.any { normalized.contains(it) }
+        if (!isDirectQuery && !hasHelpPattern) {
+            return null
+        }
+
+        return IntentResult(
+            intent = "SHOW_HELP",
+            confidence = 0.98,
+            entities = emptyMap()
+        )
+    }
+
+    private fun parseCurrentTime(normalized: String): IntentResult? {
+        val isDirectQuery = normalized == "time" || normalized == "time?" || normalized == "time now"
+        val hasTimePattern = TIME_QUERY_PATTERNS.any { normalized.contains(it) }
+        if (!isDirectQuery && !hasTimePattern) {
+            return null
+        }
+
+        return IntentResult(
+            intent = "CurrentTime",
+            confidence = 0.94,
+            entities = emptyMap()
+        )
+    }
+
     private fun parseAlarmTimer(normalized: String): IntentResult? {
         if (normalized.contains("alarm")) {
             val entities = linkedMapOf<String, String>("target" to "alarm")
@@ -47,7 +87,10 @@ class RuleBasedIntentRouter : IntentRouter {
                 entities["minute"] = time.second.toString()
             }
 
-            entities["label"] = "Jarvis Alarm"
+            parseAlarmDays(normalized)?.let { days ->
+                entities["days"] = days.joinToString(",")
+            }
+            entities["label"] = parseLabel(normalized, target = "alarm") ?: "Jarvis Alarm"
             return IntentResult(
                 intent = "SYSTEM_CONTROL",
                 confidence = 0.96,
@@ -69,7 +112,7 @@ class RuleBasedIntentRouter : IntentRouter {
                 entities["lengthSeconds"] = seconds.toString()
             }
 
-            entities["label"] = "Jarvis Timer"
+            entities["label"] = parseLabel(normalized, target = "timer") ?: "Jarvis Timer"
             return IntentResult(
                 intent = "SYSTEM_CONTROL",
                 confidence = 0.96,
@@ -105,13 +148,24 @@ class RuleBasedIntentRouter : IntentRouter {
 
     private fun parseDurationSeconds(normalized: String): Int {
         var totalSeconds = 0
-        DURATION_REGEX.findAll(normalized).forEach { match ->
+        DURATION_WORD_REGEX.findAll(normalized).forEach { match ->
             val amount = match.groupValues[1].toIntOrNull() ?: return@forEach
             val unit = match.groupValues[2]
             val seconds = when {
                 unit.startsWith("hour") || unit == "hr" || unit == "hrs" -> amount * 3600
                 unit.startsWith("min") -> amount * 60
                 unit.startsWith("sec") -> amount
+                else -> 0
+            }
+            totalSeconds += seconds
+        }
+        DURATION_SHORTHAND_REGEX.findAll(normalized).forEach { match ->
+            val amount = match.groupValues[1].toIntOrNull() ?: return@forEach
+            val unit = match.groupValues[2]
+            val seconds = when (unit) {
+                "h" -> amount * 3600
+                "m" -> amount * 60
+                "s" -> amount
                 else -> 0
             }
             totalSeconds += seconds
@@ -135,7 +189,14 @@ class RuleBasedIntentRouter : IntentRouter {
             else -> null
         } ?: return null
 
+        val levelPercent = if (target == "volume" || target == "brightness") {
+            parseLevelPercent(normalized, target)
+        } else {
+            null
+        }
+
         val action = when {
+            levelPercent != null -> "SET_LEVEL"
             UP_TOKENS.any { normalized.contains(it) } -> "UP"
             DOWN_TOKENS.any { normalized.contains(it) } -> "DOWN"
             MUTE_TOKENS.any { normalized.contains(it) } -> "MUTE"
@@ -148,14 +209,94 @@ class RuleBasedIntentRouter : IntentRouter {
             else -> "OPEN_SETTINGS"
         }
 
+        val entities = linkedMapOf(
+            "target" to target,
+            "action" to action
+        )
+        if (levelPercent != null) {
+            entities["levelPercent"] = levelPercent.toString()
+        }
+
         return IntentResult(
             intent = "SYSTEM_CONTROL",
             confidence = 0.95,
-            entities = mapOf(
-                "target" to target,
-                "action" to action
-            )
+            entities = entities
         )
+    }
+
+    private fun parseLevelPercent(normalized: String, target: String): Int? {
+        val semanticValue = when {
+            MAX_LEVEL_TOKENS.any { normalized.contains(it) } -> 100
+            MIN_LEVEL_TOKENS.any { normalized.contains(it) } -> 0
+            HALF_LEVEL_TOKENS.any { normalized.contains(it) } -> 50
+            target == "brightness" && normalized.contains("brightest") -> 100
+            target == "brightness" && normalized.contains("darkest") -> 0
+            else -> null
+        }
+        if (semanticValue != null) {
+            return semanticValue
+        }
+
+        val outOfMatch = OUT_OF_LEVEL_REGEX.find(normalized)
+        if (outOfMatch != null) {
+            val current = outOfMatch.groupValues[1].toIntOrNull()
+            val total = outOfMatch.groupValues[2].toIntOrNull()
+            if (current != null && total != null && total > 0) {
+                return ((current.toDouble() / total.toDouble()) * 100.0).toInt().coerceIn(0, 100)
+            }
+        }
+
+        val contextual = LEVEL_CONTEXT_REGEX.find(normalized)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.toIntOrNull()
+        val percentMarked = LEVEL_PERCENT_REGEX.find(normalized)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.toIntOrNull()
+        val rawValue = contextual ?: percentMarked ?: return null
+        return rawValue.coerceIn(0, 100)
+    }
+
+    private fun parseLabel(normalized: String, target: String): String? {
+        val candidate = LABEL_REGEX.find(normalized)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.trim()
+            ?.trim('.', ',', '!', '?')
+            ?.takeIf { it.isNotBlank() }
+            ?: return null
+
+        val cleaned = candidate
+            .removePrefix("the ")
+            .removePrefix("a ")
+            .removePrefix("an ")
+            .trim()
+        if (cleaned.isBlank() || cleaned == target) {
+            return null
+        }
+        return cleaned
+    }
+
+    private fun parseAlarmDays(normalized: String): List<Int>? {
+        if (normalized.contains("every day") || normalized.contains("daily")) {
+            return FULL_WEEK
+        }
+        if (normalized.contains("weekday")) {
+            return WEEKDAYS
+        }
+        if (normalized.contains("weekend")) {
+            return WEEKENDS
+        }
+        if (!normalized.contains("every ")) {
+            return null
+        }
+
+        val matches = DAY_NAME_REGEX.findAll(normalized)
+            .mapNotNull { match -> DAY_NAME_TO_CALENDAR[match.value] }
+            .distinct()
+            .toList()
+        return matches.ifEmpty { null }
     }
 
     companion object {
@@ -179,8 +320,61 @@ class RuleBasedIntentRouter : IntentRouter {
         private val MUTE_TOKENS = listOf("mute", "silent")
         private val UNMUTE_TOKENS = listOf("unmute")
         private val CANCEL_TOKENS = listOf("cancel", "remove", "delete", "dismiss", "stop")
+        private val MAX_LEVEL_TOKENS = listOf("maximum", "max", "full", "highest")
+        private val MIN_LEVEL_TOKENS = listOf("minimum", "min", "lowest", "zero")
+        private val HALF_LEVEL_TOKENS = listOf("half", "50 50")
+        private val TIME_QUERY_PATTERNS = listOf(
+            "what time",
+            "what's the time",
+            "whats the time",
+            "what is the time",
+            "tell me the time",
+            "current time",
+            "time is it"
+        )
 
         private val CLOCK_TIME_REGEX = Regex("\\b(\\d{1,2})(?::(\\d{2}))?\\s*(am|pm)?\\b")
-        private val DURATION_REGEX = Regex("\\b(\\d+)\\s*(hours?|hr|hrs|minutes?|mins?|seconds?|secs?)\\b")
+        private val DURATION_WORD_REGEX = Regex("\\b(\\d+)\\s*(hours?|hr|hrs|minutes?|mins?|seconds?|secs?)\\b")
+        private val DURATION_SHORTHAND_REGEX = Regex("\\b(\\d+)\\s*([hms])\\b")
+        private val LEVEL_CONTEXT_REGEX = Regex("\\b(?:to|at)\\s*(\\d{1,3})(?:\\s*(?:%|percent))?\\b")
+        private val LEVEL_PERCENT_REGEX = Regex("\\b(\\d{1,3})\\s*(?:%|percent)\\b")
+        private val OUT_OF_LEVEL_REGEX = Regex("\\b(\\d{1,3})\\s*(?:out of|/)\\s*(\\d{1,3})\\b")
+        private val LABEL_REGEX = Regex("\\b(?:called|named|label(?:ed)?(?: as)?)\\s+(.+)$")
+        private val DAY_NAME_REGEX = Regex("\\b(monday|mon|tuesday|tue|tues|wednesday|wed|thursday|thu|thurs|friday|fri|saturday|sat|sunday|sun)\\b")
+        private val DAY_NAME_TO_CALENDAR = mapOf(
+            "monday" to Calendar.MONDAY,
+            "mon" to Calendar.MONDAY,
+            "tuesday" to Calendar.TUESDAY,
+            "tue" to Calendar.TUESDAY,
+            "tues" to Calendar.TUESDAY,
+            "wednesday" to Calendar.WEDNESDAY,
+            "wed" to Calendar.WEDNESDAY,
+            "thursday" to Calendar.THURSDAY,
+            "thu" to Calendar.THURSDAY,
+            "thurs" to Calendar.THURSDAY,
+            "friday" to Calendar.FRIDAY,
+            "fri" to Calendar.FRIDAY,
+            "saturday" to Calendar.SATURDAY,
+            "sat" to Calendar.SATURDAY,
+            "sunday" to Calendar.SUNDAY,
+            "sun" to Calendar.SUNDAY
+        )
+        private val WEEKDAYS = listOf(
+            Calendar.MONDAY,
+            Calendar.TUESDAY,
+            Calendar.WEDNESDAY,
+            Calendar.THURSDAY,
+            Calendar.FRIDAY
+        )
+        private val WEEKENDS = listOf(Calendar.SATURDAY, Calendar.SUNDAY)
+        private val FULL_WEEK = listOf(
+            Calendar.SUNDAY,
+            Calendar.MONDAY,
+            Calendar.TUESDAY,
+            Calendar.WEDNESDAY,
+            Calendar.THURSDAY,
+            Calendar.FRIDAY,
+            Calendar.SATURDAY
+        )
     }
 }

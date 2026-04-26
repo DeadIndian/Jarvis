@@ -220,10 +220,10 @@ class PipelineOrchestrator(
 
         return when {
             intent.intent == "UNKNOWN" -> ExecutionMode.SERVER_AGENT
+            singleSkillIntent -> ExecutionMode.LOCAL_FAST
             longFreeForm -> ExecutionMode.SERVER_AGENT
             conversational -> ExecutionMode.SERVER_AGENT
             multiStep -> ExecutionMode.SERVER_AGENT
-            singleSkillIntent -> ExecutionMode.LOCAL_FAST
             else -> ExecutionMode.SERVER_AGENT
         }
     }
@@ -390,7 +390,7 @@ class PipelineOrchestrator(
 
     companion object {
         private const val MAX_MEMORY_CHARS = 400
-        private val SINGLE_SKILL_INTENTS = setOf("OPEN_APP", "SYSTEM_CONTROL", "CurrentTime")
+        private val SINGLE_SKILL_INTENTS = setOf("OPEN_APP", "SYSTEM_CONTROL", "CurrentTime", "SHOW_HELP")
         private val CONVERSATIONAL_PREFIXES = listOf(
             "what",
             "why",

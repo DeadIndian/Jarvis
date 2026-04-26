@@ -36,6 +36,17 @@ class SimplePlanner : Planner {
                     )
                 )
             }
+
+            "SHOW_HELP" -> {
+                Plan(
+                    steps = listOf(
+                        PlanStep(
+                            skill = "HelpCenter",
+                            input = emptyMap()
+                        )
+                    )
+                )
+            }
             
             "CONVERSATIONAL_RESPONSE", "SPEAK" -> {
                 // No skill execution required; orchestrator will speak the provided text directly.

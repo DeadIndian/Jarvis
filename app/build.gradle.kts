@@ -87,6 +87,17 @@ android {
         jvmTarget = "17"
         freeCompilerArgs += "-Xskip-metadata-version-check"
     }
+
+    lint {
+        lintConfig = file("lint.xml")
+        disable += setOf("GradleDependency", "OldTargetApi")
+    }
+
+    packaging {
+        jniLibs {
+            keepDebugSymbols += "**/libllm_inference_engine_jni.so"
+        }
+    }
 }
 
 dependencies {

@@ -16,6 +16,14 @@ class TinyIntentClassifierTest {
     }
 
     @Test
+    fun classifyRoutesWhatIsTheTimeToCurrentTimeIntent() {
+        val result = classifier.classify("what is the time")
+
+        assertNotNull(result)
+        assertEquals("CurrentTime", result.intent)
+    }
+
+    @Test
     fun classifyKeepsOpenAppPriorityForLaunchCommands() {
         val result = classifier.classify("open clock")
 

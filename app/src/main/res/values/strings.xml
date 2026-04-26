@@ -1,5 +1,5 @@
-<resources>
-    <string name="app_name">Jarvis MVP</string>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <string name="app_name" tools:ignore="UnusedResources">Jarvis MVP</string>
     <string name="runtime_channel_name">Jarvis Runtime</string>
     <string name="runtime_channel_description">Foreground runtime for assistant state handling</string>
     <string name="runtime_notification_title">Jarvis runtime active</string>

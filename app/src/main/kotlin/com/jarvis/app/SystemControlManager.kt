@@ -2,12 +2,14 @@ package com.jarvis.app
 
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.media.AudioManager
 import android.os.Build
 import android.provider.AlarmClock
 import android.provider.Settings
+import java.util.Calendar
 
 class SystemControlManager(context: Context) {
     private val appContext = context.applicationContext
@@ -23,8 +25,8 @@ class SystemControlManager(context: Context) {
             "bluetooth" -> openBluetoothControls(action)
             "hotspot" -> openHotspotControls(action)
             "wifi" -> openWifiControls(action)
-            "volume" -> handleVolume(action)
-            "brightness" -> openBrightnessControls(action)
+            "volume" -> handleVolume(action, input)
+            "brightness" -> handleBrightness(action, input)
             "dnd" -> openDndControls(action)
             "mobile_data" -> openMobileDataControls(action)
             "location" -> openLocationControls(action)
@@ -93,7 +95,20 @@ class SystemControlManager(context: Context) {
         }
     }
 
-    private fun handleVolume(action: String): String {
+    private fun handleVolume(action: String, input: Map<String, String>): String {
+        if (action.equals("SET_LEVEL", ignoreCase = true)) {
+            val levelPercent = input["levelPercent"]?.toIntOrNull()
+            if (levelPercent == null) {
+                return "I couldn't understand the requested volume level."
+            }
+            val boundedPercent = levelPercent.coerceIn(0, 100)
+            val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+            val targetVolume = ((maxVolume * boundedPercent) / 100.0).toInt()
+                .coerceIn(0, maxVolume)
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, targetVolume, AudioManager.FLAG_SHOW_UI)
+            return "Volume set to $boundedPercent%"
+        }
+
         return when (action.uppercase()) {
             "UP", "ON" -> {
                 audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_RAISE, AudioManager.FLAG_SHOW_UI)
@@ -104,20 +119,11 @@ class SystemControlManager(context: Context) {
                 "Volume decreased"
             }
             "MUTE" -> {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_MUTE, AudioManager.FLAG_SHOW_UI)
-                } else {
-                    audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, 0, AudioManager.FLAG_SHOW_UI)
-                }
+                audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_MUTE, AudioManager.FLAG_SHOW_UI)
                 "Volume muted"
             }
             "UNMUTE" -> {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_UNMUTE, AudioManager.FLAG_SHOW_UI)
-                } else {
-                    val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-                    audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, (max * 0.4f).toInt().coerceAtLeast(1), AudioManager.FLAG_SHOW_UI)
-                }
+                audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_UNMUTE, AudioManager.FLAG_SHOW_UI)
                 "Volume unmuted"
             }
             else -> {
@@ -127,7 +133,37 @@ class SystemControlManager(context: Context) {
         }
     }
 
-    private fun openBrightnessControls(action: String): String {
+    private fun handleBrightness(action: String, input: Map<String, String>): String {
+        if (action.equals("SET_LEVEL", ignoreCase = true)) {
+            val levelPercent = input["levelPercent"]?.toIntOrNull()
+            if (levelPercent == null) {
+                return "I couldn't understand the requested brightness level."
+            }
+            val boundedPercent = levelPercent.coerceIn(0, 100)
+            if (!Settings.System.canWrite(appContext)) {
+                launchSettings(
+                    Intent(
+                        Settings.ACTION_MANAGE_WRITE_SETTINGS,
+                        Uri.parse("package:${appContext.packageName}")
+                    )
+                )
+                return "Grant modify system settings access, then I can set brightness to $boundedPercent%."
+            }
+
+            val brightnessValue = ((boundedPercent / 100.0) * 255.0).toInt().coerceIn(0, 255)
+            Settings.System.putInt(
+                appContext.contentResolver,
+                Settings.System.SCREEN_BRIGHTNESS_MODE,
+                Settings.System.SCREEN_BRIGHTNESS_MODE_MANUAL
+            )
+            Settings.System.putInt(
+                appContext.contentResolver,
+                Settings.System.SCREEN_BRIGHTNESS,
+                brightnessValue
+            )
+            return "Brightness set to $boundedPercent%"
+        }
+
         val intent = Intent(Settings.ACTION_DISPLAY_SETTINGS)
         launchSettings(intent)
         return when (action.uppercase()) {
@@ -198,10 +234,16 @@ class SystemControlManager(context: Context) {
                     putExtra(AlarmClock.EXTRA_HOUR, hour)
                     putExtra(AlarmClock.EXTRA_MINUTES, minute)
                     putExtra(AlarmClock.EXTRA_MESSAGE, input["label"] ?: "Jarvis Alarm")
+                    parseAlarmDays(input["days"])?.let { putExtra(AlarmClock.EXTRA_DAYS, it) }
                     putExtra(AlarmClock.EXTRA_SKIP_UI, true)
                 }
                 launchSettings(intent)
-                "Alarm set for ${formatTime(hour, minute)}"
+                val repeatSummary = formatAlarmDays(input["days"])
+                if (repeatSummary != null) {
+                    "Alarm set for ${formatTime(hour, minute)} on $repeatSummary"
+                } else {
+                    "Alarm set for ${formatTime(hour, minute)}"
+                }
             }
 
             "CANCEL_ALARM" -> {
@@ -308,5 +350,36 @@ class SystemControlManager(context: Context) {
                 if (seconds != 1) append("s")
             }
         }
+    }
+
+    private fun parseAlarmDays(rawDays: String?): ArrayList<Int>? {
+        val values = rawDays
+            ?.split(",")
+            ?.mapNotNull { it.trim().toIntOrNull() }
+            ?.distinct()
+            ?.takeIf { it.isNotEmpty() }
+            ?: return null
+        return ArrayList(values)
+    }
+
+    private fun formatAlarmDays(rawDays: String?): String? {
+        val dayNames = rawDays
+            ?.split(",")
+            ?.mapNotNull { it.trim().toIntOrNull() }
+            ?.mapNotNull { day ->
+                when (day) {
+                    Calendar.SUNDAY -> "Sunday"
+                    Calendar.MONDAY -> "Monday"
+                    Calendar.TUESDAY -> "Tuesday"
+                    Calendar.WEDNESDAY -> "Wednesday"
+                    Calendar.THURSDAY -> "Thursday"
+                    Calendar.FRIDAY -> "Friday"
+                    Calendar.SATURDAY -> "Saturday"
+                    else -> null
+                }
+            }
+            ?.takeIf { it.isNotEmpty() }
+            ?: return null
+        return dayNames.joinToString(", ")
     }
 }

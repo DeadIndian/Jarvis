@@ -1,3 +1,5 @@
+@file:Suppress("DEPRECATION")
+
 package com.jarvis.llm.providers
 
 import android.content.Context

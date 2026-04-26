@@ -76,6 +76,7 @@ class TinyIntentClassifier {
             "what time",
             "what's the time",
             "whats the time",
+            "what is the time",
             "tell me the time",
             "current time",
             "time is it"

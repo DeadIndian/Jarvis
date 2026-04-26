@@ -9,6 +9,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import android.speech.tts.Voice
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.collectAsState
@@ -19,6 +20,7 @@ import androidx.core.content.FileProvider
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
 import com.jarvis.app.ui.MainScreen
+import com.jarvis.app.ui.MainTab
 import com.jarvis.app.ui.theme.JarvisTheme
 import com.jarvis.app.utils.SoundPlayer
 import com.jarvis.core.Event
@@ -37,6 +39,7 @@ import com.jarvis.memory.MarkdownFileMemoryStore
 import com.jarvis.planner.SimplePlanner
 import com.jarvis.skills.AppLauncherSkill
 import com.jarvis.skills.CurrentTimeSkill
+import com.jarvis.skills.HelpCenterSkill
 import com.jarvis.skills.InMemorySkillRegistry
 import com.jarvis.skills.SystemControlSkill
 import kotlinx.coroutines.Dispatchers
@@ -47,13 +50,24 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.nio.file.Path
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 open class MainActivity : AppCompatActivity() {
     companion object {
         private const val GOOGLE_TTS_ENGINE_PACKAGE = "com.google.android.tts"
         private const val EXTRA_AUTO_START_VOICE = "com.jarvis.app.extra.AUTO_START_VOICE"
+        private const val EXTRA_INITIAL_TAB = "com.jarvis.app.extra.INITIAL_TAB"
         private const val VOICE_SESSION_EXIT_PHRASE = "thank you"
+        private val MALE_TTS_VOICE_NAMES = listOf(
+            "en-us-x-iom-local",
+            "en-us-x-iol-local",
+            "en-us-x-iog-local",
+            "en-us-x-iob-local"
+        )
         const val ACTION_LAUNCH_OVERLAY = "com.jarvis.app.action.LAUNCH_OVERLAY"
 
         fun createOverlayIntent(context: Context, autoStartVoice: Boolean = true): Intent {
@@ -63,6 +77,15 @@ open class MainActivity : AppCompatActivity() {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
                 addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            }
+        }
+
+        fun createMainIntent(context: Context, initialTab: MainTab = MainTab.HOME): Intent {
+            return Intent(context, MainActivity::class.java).apply {
+                putExtra(EXTRA_INITIAL_TAB, initialTab.route)
+                addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
         }
     }
@@ -88,6 +111,8 @@ open class MainActivity : AppCompatActivity() {
     private var lastWakeWordGateReason: String? = null
     private val audioManager by lazy { getSystemService(Context.AUDIO_SERVICE) as AudioManager }
     private var playbackCallback: AudioManager.AudioPlaybackCallback? = null
+    private val pendingEvents = mutableListOf<Event>()
+    private val pendingSpeechCompletions = ConcurrentHashMap<String, CountDownLatch>()
     private val wakeWordMediaPollHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private val wakeWordMediaPollRunnable = object : Runnable {
         override fun run() {
@@ -110,6 +135,8 @@ open class MainActivity : AppCompatActivity() {
 
     private val _logsFlow = MutableStateFlow<List<String>>(emptyList())
     val logsFlow: StateFlow<List<String>> = _logsFlow.asStateFlow()
+    private val _selectedMainTabFlow = MutableStateFlow(MainTab.HOME)
+    val selectedMainTabFlow: StateFlow<MainTab> = _selectedMainTabFlow.asStateFlow()
 
     private val permissionRequest = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -132,6 +159,8 @@ open class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        supportActionBar?.hide()
+        handleNavigationIntent(intent)
         
         soundPlayer = SoundPlayer(this)
         logger = AndroidLogJarvisLogger { line -> runOnUiThread { appendLog(line) } }
@@ -166,7 +195,8 @@ open class MainActivity : AppCompatActivity() {
         }
 
         lifecycleScope.launch {
-            orchestrator = buildOrchestrator(warmup = false)
+            val orch = buildOrchestrator(warmup = false)
+            attachOrchestrator(orch)
             orchestrator?.let {
                 _jarvisStateFlow.value = it.currentState()
                 syncRuntimeService(it.currentState())
@@ -216,12 +246,17 @@ open class MainActivity : AppCompatActivity() {
                 JarvisTheme {
                     val state = jarvisStateFlow.collectAsState().value
                     val logs = logsFlow.collectAsState().value
+                    val selectedTab = selectedMainTabFlow.collectAsState().value
                     val modelUiState = modelViewModel.uiState.collectAsState().value
                     
                     MainScreen(
                         jarvisState = state.name,
                         logs = logs,
+                        selectedTab = selectedTab,
+                        helpOverview = JarvisHelpCatalog.overviewBlocks,
+                        helpCommandSections = JarvisHelpCatalog.commandSections,
                         modelStatusUiState = modelUiState,
+                        onTabSelected = { _selectedMainTabFlow.value = it },
                         onUseModelClicked = { initializeModelBackground() },
                         onModelSelected = { modelViewModel.selectModel(it) },
                         onRefreshModels = { modelViewModel.refreshModelList() },
@@ -235,6 +270,12 @@ open class MainActivity : AppCompatActivity() {
         appendLog("Jarvis MVP ready")
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleNavigationIntent(intent)
+    }
+
     override fun onDestroy() {
         activeLocalLlmProvider?.close()
         wakeWordEngine.release()
@@ -242,6 +283,8 @@ open class MainActivity : AppCompatActivity() {
         unregisterMediaPlaybackCallback()
         speechToText.release()
         soundPlayer?.release()
+        pendingSpeechCompletions.values.forEach { it.countDown() }
+        pendingSpeechCompletions.clear()
         if (::textToSpeech.isInitialized) {
             textToSpeech.stop()
             textToSpeech.shutdown()
@@ -259,7 +302,7 @@ open class MainActivity : AppCompatActivity() {
         requestBackgroundPermissions()
         lifecycleScope.launch {
             val orch = buildOrchestrator(warmup = true)
-            orchestrator = orch
+            attachOrchestrator(orch)
             val isReady = activeLocalLlmProvider != null
             if (isReady) {
                 appendLog("Model warmed up and ready")
@@ -271,17 +314,40 @@ open class MainActivity : AppCompatActivity() {
     }
 
     private fun dispatch(event: Event) {
-        val orch = orchestrator ?: return
+        val orch = orchestrator
+        if (orch == null) {
+            synchronized(pendingEvents) {
+                pendingEvents += event
+            }
+            appendLog("Queued event: ${event::class.simpleName}")
+            return
+        }
+        dispatchToOrchestrator(orch, event)
+    }
+
+    private fun dispatchToOrchestrator(orch: PipelineOrchestrator, event: Event) {
         lifecycleScope.launch(Dispatchers.Default) {
             orch.dispatch(event)
             appendLog("Event: ${event::class.simpleName}")
         }
     }
 
+    private fun attachOrchestrator(orch: PipelineOrchestrator) {
+        orchestrator = orch
+        val queuedEvents = synchronized(pendingEvents) {
+            pendingEvents.toList().also { pendingEvents.clear() }
+        }
+        queuedEvents.forEach { event -> dispatchToOrchestrator(orch, event) }
+    }
+
     private suspend fun buildOrchestrator(warmup: Boolean): PipelineOrchestrator = withContext(Dispatchers.IO) {
         val installedAppLauncher = InstalledAppLauncher(this@MainActivity)
         val systemControlManager = SystemControlManager(this@MainActivity)
-        val memoryStore = MarkdownFileMemoryStore(writesEnabled = false)
+        val memoryBaseDir: Path = File(applicationContext.filesDir, "memory").toPath()
+        val memoryStore = MarkdownFileMemoryStore(
+            baseDirectory = memoryBaseDir,
+            writesEnabled = false
+        )
 
         activeLocalLlmProvider?.close()
         activeLocalLlmProvider = null
@@ -290,6 +356,7 @@ open class MainActivity : AppCompatActivity() {
             register(AppLauncherSkill(installedAppLauncher::launch))
             register(CurrentTimeSkill())
             register(SystemControlSkill(systemControlManager::execute))
+            register(HelpCenterSkill(::openHelpCenter))
         }
 
         val modelId = modelManager.getActiveModelId()
@@ -406,30 +473,143 @@ open class MainActivity : AppCompatActivity() {
         _logsFlow.value = currentLogs
     }
 
+    private fun handleNavigationIntent(intent: Intent?) {
+        val route = intent?.getStringExtra(EXTRA_INITIAL_TAB) ?: return
+        _selectedMainTabFlow.value = MainTab.fromRoute(route)
+    }
+
+    private suspend fun openHelpCenter(): String {
+        return withContext(Dispatchers.Main) {
+            if (this@MainActivity is AssistantOverlayActivity) {
+                startActivity(createMainIntent(this@MainActivity, MainTab.HELP))
+            } else {
+                _selectedMainTabFlow.value = MainTab.HELP
+            }
+            "Opened the help center."
+        }
+    }
+
     private fun initializeTextToSpeech() {
         textToSpeech = TextToSpeech(this, { status ->
             if (status == TextToSpeech.SUCCESS) {
                 isTextToSpeechReady = true
-                textToSpeech.language = Locale.US
+                applyPreferredMaleTtsVoice()
+                appendLog("TTS initialized")
+            } else {
+                appendLog("TTS initialization failed: status=$status")
             }
         }, GOOGLE_TTS_ENGINE_PACKAGE)
+        textToSpeech.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+            override fun onStart(utteranceId: String?) = Unit
+
+            override fun onDone(utteranceId: String?) {
+                signalSpeechCompletion(utteranceId)
+            }
+
+            @Suppress("OVERRIDE_DEPRECATION")
+            override fun onError(utteranceId: String?) {
+                signalSpeechCompletion(utteranceId)
+            }
+        })
     }
 
-    private fun speakWithAndroidTextToSpeech(text: String) {
-        if (isTextToSpeechReady) {
-            textToSpeech.speak(text, TextToSpeech.QUEUE_FLUSH, null, "jarvis-${System.currentTimeMillis()}")
-        }
-    }
-
-    private fun speakAfterActionSound(text: String) {
-        val player = soundPlayer
-        if (player == null) {
-            runOnUiThread { speakWithAndroidTextToSpeech(text) }
+    private fun applyPreferredMaleTtsVoice() {
+        if (!isTextToSpeechReady) {
             return
         }
 
-        player.playActionSoundThen {
-            runOnUiThread { speakWithAndroidTextToSpeech(text) }
+        val voice = selectPreferredMaleVoice()
+        if (voice != null) {
+            textToSpeech.voice = voice
+            appendLog("TTS voice: ${voice.name}")
+        } else {
+            textToSpeech.language = Locale.US
+            appendLog("TTS voice: Default US English")
+        }
+    }
+
+    private fun selectPreferredMaleVoice(): Voice? {
+        val voices = try {
+            textToSpeech.voices
+        } catch (_: Exception) {
+            null
+        } ?: return null
+
+        val englishVoices = voices.filter { it.locale.language == "en" }
+
+        val genderMatchedVoice = englishVoices
+            .filter { voice -> readVoiceGender(voice) == 2 }
+            .sortedWith(compareBy<Voice> { it.isNetworkConnectionRequired }
+                .thenBy { it.locale.country != "US" }
+            )
+            .firstOrNull()
+        if (genderMatchedVoice != null) {
+            return genderMatchedVoice
+        }
+
+        for (name in MALE_TTS_VOICE_NAMES) {
+            englishVoices.find { it.name.equals(name, ignoreCase = true) }?.let { return it }
+        }
+
+        return englishVoices.firstOrNull { it.name.contains("male", ignoreCase = true) }
+    }
+
+    private fun readVoiceGender(voice: Voice): Int? {
+        return try {
+            val field = voice.javaClass.getDeclaredField("mGender")
+            field.isAccessible = true
+            field.get(voice) as? Int
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun signalSpeechCompletion(utteranceId: String?) {
+        if (utteranceId.isNullOrBlank()) {
+            return
+        }
+        pendingSpeechCompletions.remove(utteranceId)?.countDown()
+    }
+
+    private fun speakWithAndroidTextToSpeech(text: String, utteranceId: String): Boolean {
+        if (!isTextToSpeechReady) {
+            appendLog("Skipped speaking because TTS is not ready yet")
+            return false
+        }
+        val result = textToSpeech.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
+        if (result != TextToSpeech.SUCCESS) {
+            appendLog("TTS speak request failed")
+            return false
+        }
+        appendLog("Speaking: $text")
+        return true
+    }
+
+    private fun speakAfterActionSound(text: String) {
+        val utteranceId = "jarvis-${System.currentTimeMillis()}"
+        val completion = CountDownLatch(1)
+        pendingSpeechCompletions[utteranceId] = completion
+
+        val startSpeech = {
+            runOnUiThread {
+                val accepted = speakWithAndroidTextToSpeech(text, utteranceId)
+                if (!accepted) {
+                    signalSpeechCompletion(utteranceId)
+                }
+            }
+        }
+
+        val player = soundPlayer
+        if (player == null) {
+            startSpeech()
+        } else {
+            player.playActionSoundThen(startSpeech)
+        }
+
+        val finished = completion.await(15, TimeUnit.SECONDS)
+        if (!finished) {
+            pendingSpeechCompletions.remove(utteranceId)
+            appendLog("Timed out waiting for speech completion")
         }
     }
 
@@ -618,7 +798,7 @@ open class MainActivity : AppCompatActivity() {
     }
 
     private fun registerMediaPlaybackCallback() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || playbackCallback != null) {
+        if (playbackCallback != null) {
             return
         }
         val callback = object : AudioManager.AudioPlaybackCallback() {
@@ -634,9 +814,7 @@ open class MainActivity : AppCompatActivity() {
 
     private fun unregisterMediaPlaybackCallback() {
         val callback = playbackCallback ?: return
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            audioManager.unregisterAudioPlaybackCallback(callback)
-        }
+        audioManager.unregisterAudioPlaybackCallback(callback)
         playbackCallback = null
     }
 

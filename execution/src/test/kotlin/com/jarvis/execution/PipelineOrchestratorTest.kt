@@ -15,7 +15,12 @@ import com.jarvis.memory.models.MemoryChunk
 import com.jarvis.output.OutputChannel
 import com.jarvis.planner.SimplePlanner
 import com.jarvis.skills.AppLauncherSkill
+import com.jarvis.skills.CurrentTimeSkill
 import com.jarvis.skills.InMemorySkillRegistry
+import java.time.Clock
+import java.time.Instant
+import java.time.ZoneId
+import java.util.Locale
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -133,6 +138,36 @@ class PipelineOrchestratorTest {
     }
 
     @Test
+    fun decideExecutionModeUsesLocalFastForCurrentTimeConversationalQuery() {
+        val orchestrator = buildOrchestrator()
+
+        val mode = orchestrator.decideExecutionMode(
+            intent = com.jarvis.intent.IntentResult(
+                intent = "CurrentTime",
+                confidence = 0.95,
+                entities = emptyMap()
+            ),
+            input = "what is the time"
+        )
+
+        assertEquals(ExecutionMode.LOCAL_FAST, mode)
+    }
+
+    @Test
+    fun voiceInputForCurrentTimeSpeaksResultAndReturnsToListening() {
+        val output = FakeOutputChannel()
+        val orchestrator = buildOrchestrator(output = output)
+
+        orchestrator.dispatch(Event.VoiceInput("what is the time"))
+
+        waitForCondition { output.spoken.any { it == "It is 1:05 PM UTC." } }
+        waitForCondition { output.listeningShownCount > 0 }
+
+        assertTrue(output.spoken.contains("It is 1:05 PM UTC."))
+        assertTrue(output.listeningShownCount > 0)
+    }
+
+    @Test
     fun powerButtonTransitionsToBarnDoorAndTimeoutReturnsIdle() {
         val orchestrator = buildOrchestrator()
 
@@ -161,7 +196,15 @@ class PipelineOrchestratorTest {
         llmRouter: LLMRouter? = null,
         remoteAgentClient: RemoteAgentClient? = null
     ): PipelineOrchestrator {
-        val skillRegistry = InMemorySkillRegistry().apply { register(AppLauncherSkill()) }
+        val skillRegistry = InMemorySkillRegistry().apply {
+            register(AppLauncherSkill())
+            register(
+                CurrentTimeSkill(
+                    clock = Clock.fixed(Instant.parse("2026-04-22T13:05:00Z"), ZoneId.of("UTC")),
+                    locale = Locale.US
+                )
+            )
+        }
 
         return PipelineOrchestrator(
             eventBus = eventBus,

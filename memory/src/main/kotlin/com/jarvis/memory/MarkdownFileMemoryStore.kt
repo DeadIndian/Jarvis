@@ -82,7 +82,7 @@ class MarkdownFileMemoryStore(
 
         logger.info("memory", "Memory search executed", mapOf("matches" to ranked.size, "limit" to limit))
         return ranked.map { chunk ->
-            val file = Path.of(chunk.filePath).name
+            val file = fileNameFromPath(chunk.filePath)
             "(${file} - ${chunk.section})\n${chunk.text}"
         }
     }
@@ -350,6 +350,11 @@ class MarkdownFileMemoryStore(
 
     private fun normalizeSearchText(value: String): String {
         return value.lowercase().replace(Regex("[^a-z0-9]+"), " ").trim()
+    }
+
+    private fun fileNameFromPath(value: String): String {
+        val normalized = value.replace('\\', '/')
+        return normalized.substringAfterLast('/', normalized).ifBlank { normalized }
     }
 
     private fun String.sanitizeTitle(): String {
