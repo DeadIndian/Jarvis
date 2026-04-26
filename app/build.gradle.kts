@@ -37,6 +37,7 @@ val llmBackend: String = resolveConfigValue("JARVIS_LLM_BACKEND", "hybrid")
 val liteRtModelDir: String = resolveConfigValue("JARVIS_LITERT_MODEL_DIR")
 
 val huggingFaceToken: String = resolveConfigValue("JARVIS_HF_TOKEN")
+val remoteAgentBaseUrl: String = resolveConfigValue("JARVIS_REMOTE_AGENT_BASE_URL")
 
 fun esc(value: String): String = value.replace("\\", "\\\\").replace("\"", "\\\"")
 
@@ -63,6 +64,7 @@ android {
         buildConfigField("String", "JARVIS_LLM_BACKEND", "\"${esc(llmBackend)}\"")
         buildConfigField("String", "JARVIS_LITERT_MODEL_DIR", "\"${esc(liteRtModelDir)}\"")
         buildConfigField("String", "JARVIS_HF_TOKEN", "\"${esc(huggingFaceToken)}\"")
+        buildConfigField("String", "JARVIS_REMOTE_AGENT_BASE_URL", "\"${esc(remoteAgentBaseUrl)}\"")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

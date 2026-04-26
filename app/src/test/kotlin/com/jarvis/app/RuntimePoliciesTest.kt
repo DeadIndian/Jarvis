@@ -62,10 +62,10 @@ class RuntimePoliciesTest {
     }
 
     @Test
-    fun wakeWordPolicyStopsInIdle() {
+    fun wakeWordPolicyStartsInIdle() {
         val action = WakeWordPolicy.decide(previous = JarvisState.HOUSE_PARTY, current = JarvisState.IDLE)
 
-        assertEquals(WakeWordAction.STOP, action)
+        assertEquals(WakeWordAction.START, action)
     }
 
     @Test

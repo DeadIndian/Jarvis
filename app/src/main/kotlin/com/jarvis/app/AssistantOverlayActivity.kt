@@ -19,6 +19,20 @@ import com.jarvis.core.JarvisState
  * the system digital assistant trigger.
  */
 class AssistantOverlayActivity : MainActivity() {
+    private var seenProcessingState: Boolean = false
+
+    override fun onJarvisStateChanged(state: JarvisState) {
+        if (state == JarvisState.THINKING || state == JarvisState.SPEAKING) {
+            seenProcessingState = true
+            return
+        }
+
+        // Dismiss overlay after one command lifecycle completes.
+        if ((state == JarvisState.IDLE || state == JarvisState.ACTIVE) && seenProcessingState) {
+            finish()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         configureOverlayWindow()

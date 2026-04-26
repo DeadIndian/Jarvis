@@ -56,7 +56,10 @@ object WakeWordPolicy {
         if (previous == current) {
             return WakeWordAction.NONE
         }
-        // Wake-word is no longer required for user flow; voice capture is started explicitly.
-        return WakeWordAction.STOP
+        return if (current == JarvisState.IDLE) {
+            WakeWordAction.START
+        } else {
+            WakeWordAction.STOP
+        }
     }
 }

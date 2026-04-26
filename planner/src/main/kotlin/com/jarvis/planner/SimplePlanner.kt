@@ -25,6 +25,17 @@ class SimplePlanner : Planner {
                     )
                 )
             }
+
+            "SYSTEM_CONTROL" -> {
+                Plan(
+                    steps = listOf(
+                        PlanStep(
+                            skill = "SystemControl",
+                            input = entities
+                        )
+                    )
+                )
+            }
             
             "CONVERSATIONAL_RESPONSE", "SPEAK" -> {
                 // No skill execution required; orchestrator will speak the provided text directly.

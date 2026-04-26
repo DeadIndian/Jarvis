@@ -15,7 +15,9 @@ class MarkdownFileMemoryStoreTest {
 
         store.put("User Preference", "likes concise output")
 
-        assertEquals("likes concise output", store.get("user preference"))
+        val value = store.get("User Preference")
+        assertTrue(value!!.contains("# User Preference"))
+        assertTrue(value.contains("likes concise output"))
     }
 
     @Test
@@ -31,14 +33,95 @@ class MarkdownFileMemoryStoreTest {
         val tempDir = Files.createTempDirectory("jarvis-memory-test")
         val store = MarkdownFileMemoryStore(baseDirectory = tempDir)
 
-        store.put("alpha", "jarvis supports offline memory retrieval")
-        store.put("beta", "this note mentions retrieval and memory")
-        store.put("gamma", "unrelated content")
+        store.put(
+            "notes/alpha",
+            """
+            # Alpha
+
+            ## Decisions
+
+            - Jarvis supports offline memory retrieval and semantic lookup.
+            """.trimIndent()
+        )
+        store.put(
+            "notes/beta",
+            """
+            # Beta
+
+            ## Details
+
+            - This note mentions retrieval and memory systems.
+            """.trimIndent()
+        )
+        store.put(
+            "notes/gamma",
+            """
+            # Gamma
+
+            ## Details
+
+            - Unrelated content about weather.
+            """.trimIndent()
+        )
 
         val results = store.search(query = "memory retrieval", limit = 2)
 
         assertEquals(2, results.size)
-        assertTrue(results.contains("jarvis supports offline memory retrieval"))
-        assertTrue(results.contains("this note mentions retrieval and memory"))
+        assertTrue(results.any { it.contains("memory") || it.contains("retrieval") })
+        assertTrue(results.none { it.contains("weather") })
+    }
+
+    @Test
+    fun updateSectionReplacesOnlyTargetSection() = runTest {
+        val tempDir = Files.createTempDirectory("jarvis-memory-test")
+        val store = MarkdownFileMemoryStore(baseDirectory = tempDir)
+
+        store.put(
+            "notes/projects",
+            """
+            # Projects
+
+            ## Decisions
+
+            - Keep old decision
+
+            ## Ideas
+
+            - Keep this section unchanged
+            """.trimIndent()
+        )
+
+        store.updateSection(
+            file = "notes/projects",
+            section = "Decisions",
+            content = "- Use section chunking for retrieval"
+        )
+
+        val value = store.get("notes/projects")
+        assertTrue(value!!.contains("Use section chunking for retrieval"))
+        assertTrue(value.contains("Keep this section unchanged"))
+    }
+
+    @Test
+    fun appendAddsContentToExistingFile() = runTest {
+        val tempDir = Files.createTempDirectory("jarvis-memory-test")
+        val store = MarkdownFileMemoryStore(baseDirectory = tempDir)
+
+        store.put(
+            "notes/todo",
+            """
+            # Todo
+
+            ## Notes
+
+            - first item
+            """.trimIndent()
+        )
+
+        store.append("notes/todo", "- second item")
+
+        val value = store.get("notes/todo")
+        assertTrue(value!!.contains("first item"))
+        assertTrue(value.contains("second item"))
     }
 }

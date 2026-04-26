@@ -3,6 +3,8 @@ package com.jarvis.app
 import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.media.AudioManager
+import android.media.AudioPlaybackConfiguration
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -24,6 +26,8 @@ import com.jarvis.core.InMemoryEventBus
 import com.jarvis.core.JarvisState
 import com.jarvis.execution.PipelineOrchestrator
 import com.jarvis.execution.SkillExecutionEngine
+import com.jarvis.execution.HttpRemoteAgentClient
+import com.jarvis.execution.RemoteAgentClient
 import com.jarvis.intent.LLMIntentRouter
 import com.jarvis.intent.RuleBasedIntentRouter
 import com.jarvis.llm.LLMProvider
@@ -34,7 +38,9 @@ import com.jarvis.planner.SimplePlanner
 import com.jarvis.skills.AppLauncherSkill
 import com.jarvis.skills.CurrentTimeSkill
 import com.jarvis.skills.InMemorySkillRegistry
+import com.jarvis.skills.SystemControlSkill
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -47,6 +53,7 @@ open class MainActivity : AppCompatActivity() {
     companion object {
         private const val GOOGLE_TTS_ENGINE_PACKAGE = "com.google.android.tts"
         private const val EXTRA_AUTO_START_VOICE = "com.jarvis.app.extra.AUTO_START_VOICE"
+        private const val VOICE_SESSION_EXIT_PHRASE = "thank you"
         const val ACTION_LAUNCH_OVERLAY = "com.jarvis.app.action.LAUNCH_OVERLAY"
 
         fun createOverlayIntent(context: Context, autoStartVoice: Boolean = true): Intent {
@@ -74,7 +81,25 @@ open class MainActivity : AppCompatActivity() {
     private var activeLocalLlmProvider: MediaPipeLLMProvider? = null
     private lateinit var classifierTraceStore: ClassifierTraceStore
     private var voiceAutoStarted = false
+    private var continuousVoiceModeEnabled = false
+    private var sttCaptureActive = false
+    private var pendingWakeWordStart = false
+    private var wakeWordBlockedByMedia = false
+    private var lastWakeWordGateReason: String? = null
+    private val audioManager by lazy { getSystemService(Context.AUDIO_SERVICE) as AudioManager }
+    private var playbackCallback: AudioManager.AudioPlaybackCallback? = null
+    private val wakeWordMediaPollHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val wakeWordMediaPollRunnable = object : Runnable {
+        override fun run() {
+            syncWakeWordEngine(_jarvisStateFlow.value)
+            if (wakeWordBlockedByMedia) {
+                wakeWordMediaPollHandler.postDelayed(this, 1500L)
+            }
+        }
+    }
     protected var soundPlayer: SoundPlayer? = null
+
+    protected open fun onJarvisStateChanged(state: JarvisState) = Unit
 
     // Compose States
     private val _jarvisStateFlow = MutableStateFlow(JarvisState.IDLE)
@@ -92,7 +117,16 @@ open class MainActivity : AppCompatActivity() {
         val micGranted = permissions[Manifest.permission.RECORD_AUDIO] ?: false
         if (micGranted) {
             appendLog("Microphone permission granted")
-            startVoiceCapture()
+            if (pendingWakeWordStart) {
+                pendingWakeWordStart = false
+                syncWakeWordEngine(_jarvisStateFlow.value)
+            } else if (continuousVoiceModeEnabled) {
+                syncContinuousVoiceCapture(_jarvisStateFlow.value)
+            } else {
+                startVoiceCapture()
+            }
+        } else {
+            pendingWakeWordStart = false
         }
     }
 
@@ -125,9 +159,9 @@ open class MainActivity : AppCompatActivity() {
                 runOnUiThread {
                     syncRuntimeService(event.state)
                     syncWakeWordEngine(event.state)
+                    syncContinuousVoiceCapture(event.state)
+                    onJarvisStateChanged(event.state)
                 }
-            } else if (event is Event.SkillResult) {
-                soundPlayer?.playActionSound()
             }
         }
 
@@ -145,17 +179,33 @@ open class MainActivity : AppCompatActivity() {
             logger = logger,
             onPartialResult = { partial -> _jarvisInputTextFlow.value = partial },
             onFinalResult = { finalText -> 
+                sttCaptureActive = false
                 _jarvisInputTextFlow.value = "" // clear
-                dispatch(Event.VoiceInput(finalText)) 
+                if (isVoiceSessionExitPhrase(finalText)) {
+                    disableContinuousVoiceMode()
+                } else {
+                    dispatch(Event.VoiceInput(finalText))
+                }
             },
-            onError = { message -> appendLog("STT error: $message") }
+            onError = { message ->
+                sttCaptureActive = false
+                appendLog("STT error: $message")
+                scheduleContinuousVoiceRetry()
+                syncWakeWordEngine(_jarvisStateFlow.value)
+            }
         )
         wakeWordEngine = OpenWakeWordEngine(
             context = this,
             logger = logger,
-            onWakeWordDetected = { keyword -> dispatch(Event.WakeWordDetected(keyword)) },
+            onWakeWordDetected = { keyword ->
+                launchOverlayFromWakeWord()
+                dispatch(Event.WakeWordDetected(keyword))
+            },
             onError = { message -> appendLog("Wake-word error: $message") }
         )
+        // Ensure wake-word state is reconciled after engine creation.
+        syncWakeWordEngine(_jarvisStateFlow.value)
+        registerMediaPlaybackCallback()
 
         maybeAutoStartVoiceMode()
         
@@ -188,6 +238,8 @@ open class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         activeLocalLlmProvider?.close()
         wakeWordEngine.release()
+        wakeWordMediaPollHandler.removeCallbacks(wakeWordMediaPollRunnable)
+        unregisterMediaPlaybackCallback()
         speechToText.release()
         soundPlayer?.release()
         if (::textToSpeech.isInitialized) {
@@ -195,6 +247,12 @@ open class MainActivity : AppCompatActivity() {
             textToSpeech.shutdown()
         }
         super.onDestroy()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Reconcile wake-word lifecycle whenever activity comes to foreground.
+        syncWakeWordEngine(_jarvisStateFlow.value)
     }
 
     private fun initializeModelBackground() {
@@ -222,7 +280,8 @@ open class MainActivity : AppCompatActivity() {
 
     private suspend fun buildOrchestrator(warmup: Boolean): PipelineOrchestrator = withContext(Dispatchers.IO) {
         val installedAppLauncher = InstalledAppLauncher(this@MainActivity)
-        val memoryStore = MarkdownFileMemoryStore()
+        val systemControlManager = SystemControlManager(this@MainActivity)
+        val memoryStore = MarkdownFileMemoryStore(writesEnabled = false)
 
         activeLocalLlmProvider?.close()
         activeLocalLlmProvider = null
@@ -230,12 +289,13 @@ open class MainActivity : AppCompatActivity() {
         val skillRegistry = InMemorySkillRegistry().apply {
             register(AppLauncherSkill(installedAppLauncher::launch))
             register(CurrentTimeSkill())
+            register(SystemControlSkill(systemControlManager::execute))
         }
 
         val modelId = modelManager.getActiveModelId()
-        val modelFile = File(applicationContext.filesDir, "llm/" + resolveModelFileName(modelId))
+        val modelFile = resolveGpuSafeModelFile(modelId)
         
-        val localProvider: LLMProvider? = if (modelFile.exists()) {
+        val localProvider: LLMProvider? = if (modelFile?.exists() == true) {
             val provider = MediaPipeLLMProvider(
                 context = this@MainActivity,
                 modelPath = modelFile.absolutePath,
@@ -257,9 +317,19 @@ open class MainActivity : AppCompatActivity() {
             logger = logger
         )
 
+        val remoteAgentClient: RemoteAgentClient? = BuildConfig.JARVIS_REMOTE_AGENT_BASE_URL
+            .trim()
+            .takeIf { it.isNotBlank() }
+            ?.let { baseUrl ->
+                HttpRemoteAgentClient(
+                    baseUrl = baseUrl,
+                    logger = logger
+                )
+            }
+
         val outputChannel = UiOutputChannel(
             onState = { state -> appendLog("Output state: $state") },
-            onSpeak = { text -> speakWithAndroidTextToSpeech(text) }
+            onSpeak = { text -> speakAfterActionSound(text) }
         )
 
         val intentRouter = LLMIntentRouter(
@@ -277,7 +347,9 @@ open class MainActivity : AppCompatActivity() {
             logger = logger,
             memoryStore = memoryStore,
             llmRouter = llmRouter,
-            allowCloudFallback = false
+            remoteAgentClient = remoteAgentClient,
+            allowCloudFallback = false,
+            localMemoryWritesEnabled = false
         )
     }
 
@@ -290,6 +362,41 @@ open class MainActivity : AppCompatActivity() {
             "qwen-2.5-1.5b-instruct" -> "Qwen2.5-1.5B-Instruct_multi-prefill-seq_q8_ekv4096.litertlm"
             else -> "$modelId.litertlm"
         }
+    }
+
+    private fun resolveGpuSafeModelFile(activeModelId: String): File? {
+        val llmDir = File(applicationContext.filesDir, "llm")
+        val activeFileName = resolveModelFileName(activeModelId)
+
+        val candidates = buildList {
+            if (!isKnownGpuUnstableModel(activeFileName)) {
+                add(activeFileName)
+            }
+            // Prefer known lighter local artifacts for GPU stability.
+            add("Qwen2.5-1.5B-Instruct_multi-prefill-seq_q8_ekv4096.litertlm")
+            add("Gemma3-1B-IT_multi-prefill-seq_q4_ekv4096.litertlm")
+            add(activeFileName)
+        }
+
+        val resolved = candidates
+            .distinct()
+            .map { File(llmDir, it) }
+            .firstOrNull { it.exists() }
+
+        if (resolved != null && resolved.name != activeFileName && isKnownGpuUnstableModel(activeFileName)) {
+            logger.warn(
+                "llm",
+                "Selected model is unstable on GPU; using fallback artifact",
+                mapOf("activeModel" to activeFileName, "fallbackModel" to resolved.name)
+            )
+        }
+
+        return resolved
+    }
+
+    private fun isKnownGpuUnstableModel(fileName: String): Boolean {
+        val normalized = fileName.lowercase(Locale.US)
+        return normalized.contains("gemma-4-e2b") || normalized.contains("gemma-4-e4b")
     }
 
     private fun appendLog(line: String) {
@@ -314,6 +421,18 @@ open class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun speakAfterActionSound(text: String) {
+        val player = soundPlayer
+        if (player == null) {
+            runOnUiThread { speakWithAndroidTextToSpeech(text) }
+            return
+        }
+
+        player.playActionSoundThen {
+            runOnUiThread { speakWithAndroidTextToSpeech(text) }
+        }
+    }
+
     private fun requestBackgroundPermissions() {
         val perms = mutableListOf(Manifest.permission.RECORD_AUDIO)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -328,11 +447,76 @@ open class MainActivity : AppCompatActivity() {
 
     private fun startVoiceCapture() {
         if (hasMicPermission()) {
+            sttCaptureActive = true
+            // Ensure wake-word recognizer is not holding the mic when regular STT starts.
+            wakeWordEngine.stop()
             appendLog("Listening...")
             speechToText.startListening()
         } else {
             requestBackgroundPermissions()
         }
+    }
+
+    private fun enableContinuousVoiceMode() {
+        if (continuousVoiceModeEnabled) {
+            return
+        }
+        continuousVoiceModeEnabled = true
+        appendLog("Voice mode enabled")
+
+        lifecycleScope.launch(Dispatchers.Default) {
+            orchestrator?.transitionState(JarvisState.ACTIVE)
+        }
+        syncContinuousVoiceCapture(JarvisState.ACTIVE)
+    }
+
+    private fun disableContinuousVoiceMode() {
+        if (!continuousVoiceModeEnabled) {
+            return
+        }
+        continuousVoiceModeEnabled = false
+        sttCaptureActive = false
+        appendLog("Voice mode disabled")
+        speechToText.stopListening()
+
+        lifecycleScope.launch(Dispatchers.Default) {
+            orchestrator?.transitionState(JarvisState.IDLE)
+        }
+    }
+
+    private fun syncContinuousVoiceCapture(state: JarvisState) {
+        if (!continuousVoiceModeEnabled) {
+            return
+        }
+        when (state) {
+            JarvisState.ACTIVE -> startVoiceCapture()
+            JarvisState.THINKING,
+            JarvisState.SPEAKING,
+            JarvisState.IDLE,
+            JarvisState.BARN_DOOR,
+            JarvisState.HOUSE_PARTY -> speechToText.stopListening()
+        }
+    }
+
+    private fun scheduleContinuousVoiceRetry() {
+        if (!continuousVoiceModeEnabled || _jarvisStateFlow.value != JarvisState.ACTIVE) {
+            return
+        }
+        lifecycleScope.launch {
+            delay(500)
+            if (continuousVoiceModeEnabled && _jarvisStateFlow.value == JarvisState.ACTIVE) {
+                startVoiceCapture()
+            }
+        }
+    }
+
+    private fun isVoiceSessionExitPhrase(text: String): Boolean {
+        val normalized = text
+            .trim()
+            .lowercase(Locale.US)
+            .replace(Regex("[^a-z0-9\\s]"), "")
+            .replace(Regex("\\s+"), " ")
+        return normalized == VOICE_SESSION_EXIT_PHRASE
     }
 
     private fun maybeAutoStartVoiceMode() {
@@ -346,20 +530,120 @@ open class MainActivity : AppCompatActivity() {
             return
         }
         voiceAutoStarted = true
-        startVoiceCapture()
+        enableContinuousVoiceMode()
+    }
+
+    private fun launchOverlayFromWakeWord() {
+        runOnUiThread {
+            startActivity(createOverlayIntent(this, autoStartVoice = true))
+        }
     }
 
     private fun startWakeWordEngine() {
-        if (hasMicPermission()) wakeWordEngine.start(keyword = "jarvis") else requestBackgroundPermissions()
+        if (isMediaPlaybackActive()) {
+            return
+        }
+        if (hasMicPermission()) {
+            pendingWakeWordStart = false
+            wakeWordEngine.start(keyword = "jarvis")
+        } else {
+            pendingWakeWordStart = true
+            requestBackgroundPermissions()
+        }
+    }
+
+    private fun recordWakeWordGate(reason: String) {
+        if (lastWakeWordGateReason == reason) {
+            return
+        }
+        lastWakeWordGateReason = reason
+        appendLog("Wake-word gate: $reason")
     }
 
     private fun syncWakeWordEngine(state: JarvisState) {
-        when (WakeWordPolicy.decide(lastWakeWordState, state)) {
-            WakeWordAction.START -> startWakeWordEngine()
-            WakeWordAction.STOP -> wakeWordEngine.stop()
-            else -> Unit
+        if (this is AssistantOverlayActivity) {
+            wakeWordEngine.stop()
+            recordWakeWordGate("overlay-activity")
+            lastWakeWordState = state
+            return
+        }
+
+        if (continuousVoiceModeEnabled) {
+            wakeWordEngine.stop()
+            recordWakeWordGate("continuous-voice")
+            lastWakeWordState = state
+            return
+        }
+
+        if (sttCaptureActive) {
+            wakeWordEngine.stop()
+            recordWakeWordGate("stt-active")
+            lastWakeWordState = state
+            return
+        }
+
+        if (isMediaPlaybackActive()) {
+            wakeWordEngine.stop()
+            if (!wakeWordBlockedByMedia) {
+                wakeWordBlockedByMedia = true
+                appendLog("Wake-word paused while media is playing")
+                wakeWordMediaPollHandler.removeCallbacks(wakeWordMediaPollRunnable)
+                wakeWordMediaPollHandler.postDelayed(wakeWordMediaPollRunnable, 1500L)
+            }
+            recordWakeWordGate("media-playing")
+            lastWakeWordState = state
+            return
+        }
+
+        if (wakeWordBlockedByMedia) {
+            wakeWordBlockedByMedia = false
+            wakeWordMediaPollHandler.removeCallbacks(wakeWordMediaPollRunnable)
+            appendLog("Wake-word resumed after media playback stopped")
+            if (state == JarvisState.IDLE) {
+                startWakeWordEngine()
+                lastWakeWordState = state
+                return
+            }
+        }
+
+        val shouldRunWakeWord = state == JarvisState.IDLE || state == JarvisState.ACTIVE
+        if (shouldRunWakeWord) {
+            recordWakeWordGate("enabled-$state")
+            startWakeWordEngine()
+        } else {
+            wakeWordEngine.stop()
+            recordWakeWordGate("state-$state")
         }
         lastWakeWordState = state
+    }
+
+    private fun registerMediaPlaybackCallback() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || playbackCallback != null) {
+            return
+        }
+        val callback = object : AudioManager.AudioPlaybackCallback() {
+            override fun onPlaybackConfigChanged(configs: MutableList<AudioPlaybackConfiguration>) {
+                runOnUiThread {
+                    syncWakeWordEngine(_jarvisStateFlow.value)
+                }
+            }
+        }
+        playbackCallback = callback
+        audioManager.registerAudioPlaybackCallback(callback, null)
+    }
+
+    private fun unregisterMediaPlaybackCallback() {
+        val callback = playbackCallback ?: return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            audioManager.unregisterAudioPlaybackCallback(callback)
+        }
+        playbackCallback = null
+    }
+
+    private fun isMediaPlaybackActive(): Boolean {
+        // `isMusicActive` is less noisy here than playback configuration snapshots,
+        // which can remain populated for paused/inactive sessions on some devices.
+        return audioManager.isMusicActive
     }
 
     private fun syncRuntimeService(state: JarvisState) {

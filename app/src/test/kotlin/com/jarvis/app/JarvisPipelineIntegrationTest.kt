@@ -36,9 +36,9 @@ class JarvisPipelineIntegrationTest {
         orchestrator.dispatch(Event.TextInput("open WhatsApp"))
 
         assertTrue(outputStates.contains("Thinking"))
-        assertTrue(outputStates.contains("Speaking"))
-        assertTrue(spoken.any { it.contains("Launching WhatsApp") })
-        assertEquals("ACTIVE", orchestrator.currentState().name)
+        assertTrue(outputStates.contains("Speaking").not())
+        assertTrue(spoken.isEmpty())
+        assertEquals("IDLE", orchestrator.currentState().name)
     }
 
     @Test

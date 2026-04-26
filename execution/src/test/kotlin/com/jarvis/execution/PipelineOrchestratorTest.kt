@@ -11,6 +11,7 @@ import com.jarvis.llm.LLMResponse
 import com.jarvis.llm.LLMRouter
 import com.jarvis.logging.NoOpJarvisLogger
 import com.jarvis.memory.MemoryStore
+import com.jarvis.memory.models.MemoryChunk
 import com.jarvis.output.OutputChannel
 import com.jarvis.planner.SimplePlanner
 import com.jarvis.skills.AppLauncherSkill
@@ -31,12 +32,12 @@ class PipelineOrchestratorTest {
     }
 
     @Test
-    fun wakeWordIgnoredOutsideHouseParty() {
+    fun wakeWordTransitionsToActiveFromIdle() {
         val orchestrator = buildOrchestrator()
 
         orchestrator.dispatch(Event.WakeWordDetected("jarvis"))
 
-        assertEquals(JarvisState.IDLE, orchestrator.currentState())
+        assertEquals(JarvisState.ACTIVE, orchestrator.currentState())
     }
 
     @Test
@@ -50,13 +51,17 @@ class PipelineOrchestratorTest {
 
         orchestrator.dispatch(Event.VoiceInput("open WhatsApp"))
 
-        assertTrue(output.spoken.any { it.contains("Launching WhatsApp") })
+        waitForCondition { captured.any { it is Event.SkillResult && it.skill == "pipeline" } }
+        waitForCondition { orchestrator.currentState() == JarvisState.IDLE }
+
+        assertTrue(output.spoken.isEmpty())
+        assertEquals(0, output.listeningShownCount)
         assertTrue(captured.any { it is Event.SkillResult && it.skill == "pipeline" })
-        assertEquals(JarvisState.ACTIVE, orchestrator.currentState())
+        assertEquals(JarvisState.IDLE, orchestrator.currentState())
     }
 
     @Test
-    fun unknownInputUsesLlmWithRetrievedMemoryAndPersistsInteraction() {
+    fun unknownInputFallsBackLocallyWhenServerUnavailableWithoutPersisting() {
         val output = FakeOutputChannel()
         val memory = FakeMemoryStore(searchResults = listOf("user prefers concise answers"))
         val llm = FakeLLMRouter(responseText = "I can help with that. Try asking me to open an app by name.")
@@ -65,10 +70,66 @@ class PipelineOrchestratorTest {
 
         orchestrator.dispatch(Event.TextInput("what can you do"))
 
+        waitForCondition { output.spoken.any { it.contains("Try asking me to open an app") } }
+        waitForCondition { llm.requests.isNotEmpty() }
+
         assertTrue(output.spoken.any { it.contains("Try asking me to open an app") })
         assertEquals(1, llm.requests.size)
         assertTrue(llm.requests.first().prompt.contains("user prefers concise answers"))
-        assertEquals(1, memory.persisted.size)
+        assertEquals(0, memory.persisted.size)
+    }
+
+    @Test
+    fun unknownInputUsesRemoteAgentWhenAvailable() {
+        val output = FakeOutputChannel()
+        val memory = FakeMemoryStore(searchResults = listOf("weekly notes"))
+        val remote = FakeRemoteAgentClient(response = RemoteResponse(text = "Your week was productive."))
+        val llm = FakeLLMRouter(responseText = "local fallback")
+
+        val orchestrator = buildOrchestrator(
+            output = output,
+            memoryStore = memory,
+            llmRouter = llm,
+            remoteAgentClient = remote
+        )
+
+        orchestrator.dispatch(Event.TextInput("summarize my week"))
+
+        waitForCondition { output.spoken.any { it.contains("productive") } }
+        assertEquals(1, remote.requests.size)
+        assertEquals(0, llm.requests.size)
+    }
+
+    @Test
+    fun decideExecutionModeUsesLocalFastForSingleSkillIntent() {
+        val orchestrator = buildOrchestrator()
+
+        val mode = orchestrator.decideExecutionMode(
+            intent = com.jarvis.intent.IntentResult(
+                intent = "SYSTEM_CONTROL",
+                confidence = 0.95,
+                entities = mapOf("target" to "wifi", "action" to "ON")
+            ),
+            input = "turn on wifi"
+        )
+
+        assertEquals(ExecutionMode.LOCAL_FAST, mode)
+    }
+
+    @Test
+    fun decideExecutionModeUsesServerAgentForUnknownIntent() {
+        val orchestrator = buildOrchestrator()
+
+        val mode = orchestrator.decideExecutionMode(
+            intent = com.jarvis.intent.IntentResult(
+                intent = "UNKNOWN",
+                confidence = 0.1,
+                entities = emptyMap()
+            ),
+            input = "can you summarize my entire week in detail"
+        )
+
+        assertEquals(ExecutionMode.SERVER_AGENT, mode)
     }
 
     @Test
@@ -97,7 +158,8 @@ class PipelineOrchestratorTest {
         eventBus: EventBus = InMemoryEventBus(),
         output: FakeOutputChannel = FakeOutputChannel(),
         memoryStore: MemoryStore? = null,
-        llmRouter: LLMRouter? = null
+        llmRouter: LLMRouter? = null,
+        remoteAgentClient: RemoteAgentClient? = null
     ): PipelineOrchestrator {
         val skillRegistry = InMemorySkillRegistry().apply { register(AppLauncherSkill()) }
 
@@ -109,14 +171,33 @@ class PipelineOrchestratorTest {
             outputChannel = output,
             logger = NoOpJarvisLogger,
             memoryStore = memoryStore,
-            llmRouter = llmRouter
+            llmRouter = llmRouter,
+            remoteAgentClient = remoteAgentClient
         )
+    }
+
+    private fun waitForCondition(
+        timeoutMs: Long = 2_000,
+        intervalMs: Long = 25,
+        condition: () -> Boolean
+    ) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (condition()) {
+                return
+            }
+            Thread.sleep(intervalMs)
+        }
+        assertTrue(condition(), "Condition was not met within ${timeoutMs}ms")
     }
 
     private class FakeOutputChannel : OutputChannel {
         val spoken = mutableListOf<String>()
+        var listeningShownCount: Int = 0
 
-        override fun showListening() = Unit
+        override fun showListening() {
+            listeningShownCount += 1
+        }
 
         override fun showThinking() = Unit
 
@@ -150,5 +231,16 @@ class PipelineOrchestratorTest {
         override suspend fun get(key: String): String? = null
 
         override suspend fun search(query: String, limit: Int): List<String> = searchResults.take(limit)
+    }
+
+    private class FakeRemoteAgentClient(
+        private val response: RemoteResponse
+    ) : RemoteAgentClient {
+        val requests = mutableListOf<RemoteRequest>()
+
+        override suspend fun process(request: RemoteRequest): RemoteResponse {
+            requests += request
+            return response
+        }
     }
 }

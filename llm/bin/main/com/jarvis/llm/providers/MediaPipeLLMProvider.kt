@@ -15,8 +15,8 @@ class MediaPipeLLMProvider(
     private val context: Context,
     private val modelPath: String,
     private val logger: JarvisLogger = NoOpJarvisLogger,
-    private val maxTokens: Int = 512,
-    private val topK: Int = 40
+    private val maxTokens: Int = 256,
+    private val topK: Int = 20
 ) : LLMProvider {
     override val name: String = "mediapipe-litert"
 
@@ -29,18 +29,24 @@ class MediaPipeLLMProvider(
     private val isProcessing = AtomicBoolean(false)
 
     private fun getOrInitInference(): LlmInference {
+        checkGpuModelSafety(modelPath)
         return inference ?: synchronized(this) {
             inference ?: run {
                 logger.info("llm", "Initializing MediaPipe LlmInference", mapOf("model" to modelPath))
+                val resolvedMaxTokens = resolveMaxTokensForModel(modelPath, maxTokens)
                 val options = LlmInference.LlmInferenceOptions.builder()
                     .setModelPath(modelPath)
-                    .setMaxTokens(maxTokens)
+                    .setMaxTokens(resolvedMaxTokens)
                     .setMaxTopK(topK)
                     .setPreferredBackend(LlmInference.Backend.GPU)
                     .build()
                 LlmInference.createFromOptions(context, options).also {
                     inference = it 
-                    logger.info("llm", "MediaPipe LlmInference initialized", mapOf("backend" to "GPU"))
+                    logger.info(
+                        "llm",
+                        "MediaPipe LlmInference initialized",
+                        mapOf("backend" to "GPU", "maxTokens" to resolvedMaxTokens, "topK" to topK)
+                    )
                 }
             }
         }
@@ -64,6 +70,7 @@ class MediaPipeLLMProvider(
             return@withContext ""
         }
         try {
+            checkGpuModelSafety(modelPath)
             val engine = getOrInitInference()
             logger.info("llm", "Starting MediaPipe inference", mapOf("promptLength" to prompt.length))
             
@@ -76,6 +83,25 @@ class MediaPipeLLMProvider(
             ""
         } finally {
             isProcessing.set(false)
+        }
+    }
+
+    private fun resolveMaxTokensForModel(path: String, requested: Int): Int {
+        val normalized = path.lowercase()
+        return when {
+            normalized.contains("e4b") -> minOf(requested, 96)
+            normalized.contains("e2b") -> minOf(requested, 128)
+            else -> requested
+        }
+    }
+
+    private fun checkGpuModelSafety(path: String) {
+        val normalized = path.lowercase()
+        if (normalized.contains("gemma-4-e2b") || normalized.contains("gemma-4-e4b")) {
+            throw IllegalStateException(
+                "Model artifact '$path' is currently unstable with MediaPipe GPU runtime on this build/device. " +
+                    "Select a smaller GPU-safe artifact (for example Qwen 1.5B or Gemma 3 1B)."
+            )
         }
     }
 
