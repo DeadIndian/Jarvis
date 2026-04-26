@@ -3,6 +3,7 @@ package com.jarvis.app
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -55,11 +56,24 @@ class JarvisRuntimeService : Service() {
     private fun buildNotification(stateName: String): Notification {
         val title = getString(R.string.runtime_notification_title)
         val text = getString(R.string.runtime_notification_text, stateName)
+        val openOverlayIntent = MainActivity.createOverlayIntent(this, autoStartVoice = true)
+        val openOverlayPendingIntent = PendingIntent.getActivity(
+            this,
+            0,
+            openOverlayIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_notify_sync)
             .setContentTitle(title)
             .setContentText(text)
+            .setContentIntent(openOverlayPendingIntent)
+            .addAction(
+                android.R.drawable.ic_btn_speak_now,
+                getString(R.string.runtime_notification_action_talk),
+                openOverlayPendingIntent
+            )
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)

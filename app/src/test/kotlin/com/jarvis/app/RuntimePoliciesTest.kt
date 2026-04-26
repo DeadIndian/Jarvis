@@ -48,17 +48,17 @@ class RuntimePoliciesTest {
     }
 
     @Test
-    fun wakeWordPolicyStartsInHouseParty() {
+    fun wakeWordPolicyStopsInHouseParty() {
         val action = WakeWordPolicy.decide(previous = JarvisState.ACTIVE, current = JarvisState.HOUSE_PARTY)
 
-        assertEquals(WakeWordAction.START, action)
+        assertEquals(WakeWordAction.STOP, action)
     }
 
     @Test
-    fun wakeWordPolicyStaysRunningInActive() {
+    fun wakeWordPolicyStopsInActive() {
         val action = WakeWordPolicy.decide(previous = JarvisState.HOUSE_PARTY, current = JarvisState.ACTIVE)
 
-        assertEquals(WakeWordAction.START, action)
+        assertEquals(WakeWordAction.STOP, action)
     }
 
     @Test

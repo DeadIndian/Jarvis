@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.speech.tts.Voice
+import android.view.Gravity
 import android.view.View
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
@@ -20,6 +21,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.FileProvider
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.ViewModelProvider
 import com.jarvis.core.Event
@@ -45,9 +47,11 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.Locale
 
-class MainActivity : AppCompatActivity() {
-    private companion object {
+open class MainActivity : AppCompatActivity() {
+    companion object {
         private const val GOOGLE_TTS_ENGINE_PACKAGE = "com.google.android.tts"
+        private const val EXTRA_AUTO_START_VOICE = "com.jarvis.app.extra.AUTO_START_VOICE"
+        private const val ACTION_LAUNCH_OVERLAY = "com.jarvis.app.action.LAUNCH_OVERLAY"
         
         // Preferred high-quality Google TTS voice candidates if gender-based lookup fails
         private val MALE_VOICE_NAMES = listOf(
@@ -61,6 +65,16 @@ class MainActivity : AppCompatActivity() {
             "en-us-x-tpf-local", 
             "en-us-x-tpc-local"
         )
+
+        fun createOverlayIntent(context: Context, autoStartVoice: Boolean = true): Intent {
+            return Intent(context, AssistantOverlayActivity::class.java).apply {
+                action = ACTION_LAUNCH_OVERLAY
+                putExtra(EXTRA_AUTO_START_VOICE, autoStartVoice)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            }
+        }
     }
 
     private enum class TtsGender {
@@ -86,6 +100,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var downloadProgressText: TextView
     private lateinit var modelErrorText: TextView
     private lateinit var modelManagementSection: View
+    private var assistantOverlayModeEnabled = false
     private var orchestrator: PipelineOrchestrator? = null
     private val eventBus = InMemoryEventBus()
     private lateinit var speechToText: AndroidSpeechToText
@@ -103,6 +118,7 @@ class MainActivity : AppCompatActivity() {
     private var activeLocalLlmProvider: MediaPipeLLMProvider? = null
     private var knownModels: List<OnDeviceModel> = emptyList()
     private lateinit var classifierTraceStore: ClassifierTraceStore
+    private var voiceAutoStarted = false
 
     private val permissionRequest = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -130,6 +146,7 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        assistantOverlayModeEnabled = isAssistantOverlayEntry()
 
         statusText = findViewById(R.id.statusText)
         modelReadyText = findViewById(R.id.modelReadyText)
@@ -198,6 +215,8 @@ class MainActivity : AppCompatActivity() {
             onError = { message -> runOnUiThread { appendLog("Wake-word error: $message") } }
         )
 
+        maybeAutoStartVoiceMode()
+
         findViewById<Button>(R.id.sendButton).setOnClickListener {
             val input = inputText.text.toString().trim()
             if (input.isNotEmpty()) {
@@ -245,6 +264,7 @@ class MainActivity : AppCompatActivity() {
             modelManagementSection.visibility = if (modelManagementSection.visibility == View.VISIBLE) View.GONE else View.VISIBLE
         }
 
+        applyAssistantOverlayUiModeIfNeeded()
         refreshModelList()
         appendLog("Jarvis MVP ready")
     }
@@ -537,6 +557,61 @@ class MainActivity : AppCompatActivity() {
         speechToText.startListening()
     }
 
+    private fun maybeAutoStartVoiceMode() {
+        val action = intent?.action
+        val requestedFromIntent = intent?.getBooleanExtra(EXTRA_AUTO_START_VOICE, false) == true
+        val shouldAutoStart = requestedFromIntent ||
+            action == ACTION_LAUNCH_OVERLAY ||
+            action == Intent.ACTION_ASSIST ||
+            action == Intent.ACTION_VOICE_COMMAND
+        if (!shouldAutoStart || voiceAutoStarted) {
+            return
+        }
+        voiceAutoStarted = true
+        requestMicAndStartListening()
+    }
+
+    private fun isAssistantOverlayEntry(): Boolean {
+        val launchAction = intent?.action
+        return this is AssistantOverlayActivity ||
+            launchAction == ACTION_LAUNCH_OVERLAY ||
+            launchAction == Intent.ACTION_ASSIST ||
+            launchAction == Intent.ACTION_VOICE_COMMAND
+    }
+
+    private fun applyAssistantOverlayUiModeIfNeeded() {
+        if (!assistantOverlayModeEnabled) {
+            return
+        }
+
+        // Compact assistant sheet: keep status, query field, and voice controls only.
+        findViewById<View>(R.id.selectModelLabel).visibility = View.GONE
+        modelReadyText.visibility = View.GONE
+        modelSpinner.visibility = View.GONE
+        findViewById<View>(R.id.modelActionRow).visibility = View.GONE
+        modelManagementSection.visibility = View.GONE
+        modelErrorText.visibility = View.GONE
+        findViewById<View>(R.id.mainDivider).visibility = View.GONE
+        findViewById<View>(R.id.ttsVoiceLabel).visibility = View.GONE
+        ttsGenderSpinner.visibility = View.GONE
+        findViewById<View>(R.id.debugControlsLabel).visibility = View.GONE
+        findViewById<View>(R.id.debugControlsRow).visibility = View.GONE
+        findViewById<View>(R.id.exportClassifierDataButton).visibility = View.GONE
+        logText.visibility = View.GONE
+
+        statusText.text = "Jarvis"
+        statusText.textSize = 22f
+        statusText.gravity = Gravity.CENTER_HORIZONTAL
+        inputText.hint = "Speak naturally..."
+        inputText.isSingleLine = false
+        findViewById<Button>(R.id.sendButton).visibility = View.GONE
+
+        findViewById<View>(R.id.assistantRootScroll).setBackgroundColor(0x66000000)
+        findViewById<View>(R.id.assistantRootContent).background =
+            ContextCompat.getDrawable(this, R.drawable.bg_assistant_overlay_card)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+    }
+
     private fun startWakeWordEngine() {
         if (hasMicPermission()) wakeWordEngine.start(keyword = "jarvis") else requestBackgroundPermissions(MicPermissionReason.WAKE_WORD)
     }
@@ -585,4 +660,5 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
+
 }

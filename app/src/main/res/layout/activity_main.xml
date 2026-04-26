@@ -1,9 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/assistantRootScroll"
     android:layout_width="match_parent"
     android:layout_height="match_parent">
 
     <LinearLayout
+        android:id="@+id/assistantRootContent"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
@@ -29,6 +31,7 @@
             android:textStyle="italic" />
 
         <TextView
+            android:id="@+id/selectModelLabel"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
@@ -42,6 +45,7 @@
             android:layout_marginTop="8dp" />
 
         <LinearLayout
+            android:id="@+id/modelActionRow"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
@@ -168,6 +172,7 @@
             android:visibility="gone" />
 
         <View
+            android:id="@+id/mainDivider"
             android:layout_width="match_parent"
             android:layout_height="1dp"
             android:layout_marginTop="16dp"
@@ -201,6 +206,7 @@
         </LinearLayout>
 
         <TextView
+            android:id="@+id/ttsVoiceLabel"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
@@ -214,6 +220,7 @@
             android:layout_marginTop="4dp" />
 
         <TextView
+            android:id="@+id/debugControlsLabel"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
@@ -221,6 +228,7 @@
             android:textStyle="bold" />
 
         <LinearLayout
+            android:id="@+id/debugControlsRow"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal">

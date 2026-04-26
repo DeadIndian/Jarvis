@@ -56,10 +56,7 @@ object WakeWordPolicy {
         if (previous == current) {
             return WakeWordAction.NONE
         }
-        return if (current == JarvisState.HOUSE_PARTY || current == JarvisState.ACTIVE) {
-            WakeWordAction.START
-        } else {
-            WakeWordAction.STOP
-        }
+        // Wake-word is no longer required for user flow; voice capture is started explicitly.
+        return WakeWordAction.STOP
     }
 }

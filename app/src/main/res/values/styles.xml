@@ -1,3 +1,10 @@
 <resources>
     <style name="Theme.JarvisMvp" parent="Theme.MaterialComponents.DayNight.DarkActionBar" />
+
+    <style name="Theme.JarvisMvp.Overlay" parent="Theme.MaterialComponents.DayNight.Dialog">
+        <item name="android:windowIsFloating">true</item>
+        <item name="android:windowCloseOnTouchOutside">true</item>
+        <item name="android:backgroundDimEnabled">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+    </style>
 </resources>
