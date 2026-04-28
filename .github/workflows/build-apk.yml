@@ -46,7 +46,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          ASSET_ID=$(gh api repos/$GITHUB_REPOSITORY/releases/tags/rolling-release --jq '.assets[] | select(.name=="jarvis.apk") | .id' 2>/dev/null || echo "")
+          ASSET_ID=$(gh api repos/$GITHUB_REPOSITORY/releases/tags/rolling-release | jq '.assets[] | select(.name=="jarvis.apk") | .id' 2>/dev/null || echo "")
           if [ -n "$ASSET_ID" ]; then
             gh api repos/$GITHUB_REPOSITORY/releases/assets/$ASSET_ID -X DELETE
           fi
