@@ -1,4 +1,4 @@
-name: Build APK
+name: Build and Release APK
 
 on:
   push:
@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 jobs:
-  build-apk:
+  build-and-release:
     runs-on: ubuntu-latest
 
     steps:
@@ -26,15 +26,41 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Build debug APK
-        run: ./gradlew :app:assembleDebug
+      - name: Decode keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_FILE }}
+        run: echo "$KEYSTORE_BASE64" | base64 -d > release.jks
 
-      - name: Publish APK to GitHub Release
-        uses: softprops/action-gh-release@v2
+      - name: Build release APK
+        env:
+          KEYSTORE_FILE: ${{ github.workspace }}/release.jks
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: ./gradlew :app:assembleRelease
+
+      - name: Rename APK to jarvis.apk
+        run: mv app/build/outputs/apk/release/app-release.apk app/build/outputs/apk/release/jarvis.apk
+
+      - name: Delete existing release asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ASSET_ID=$(gh api repos/$GITHUB_REPOSITORY/releases/tags/rolling-release --jq '.assets[] | select(.name == "jarvis.apk") | .id' 2>/dev/null || echo "")
+          if [ ! -z "$ASSET_ID" ]; then
+            gh api repos/$GITHUB_REPOSITORY/releases/assets/$ASSET_ID -X DELETE
+          fi
+
+      - name: Update rolling release
+        uses: ncipollo/release-action@v1
         with:
-          tag_name: nightly
-          name: Jarvis Nightly Build
-          prerelease: true
-          make_latest: true
-          files: app/build/outputs/apk/debug/app-debug.apk
-          fail_on_unmatched_files: true
+          tag: rolling-release
+          name: Jarvis Rolling Release
+          body: |
+            Latest build from main branch
+
+            Download: **jarvis.apk**
+          artifacts: app/build/outputs/apk/release/jarvis.apk
+          allowUpdates: true
+          makeLatest: true
+          prerelease: false

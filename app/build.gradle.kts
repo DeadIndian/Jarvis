@@ -45,6 +45,15 @@ android {
     namespace = "com.jarvis.app"
     compileSdk = 35
 
+    signingConfigs {
+        create("release") {
+            keyStore = file(System.getenv("KEYSTORE_FILE") ?: "release.jks")
+            keyStorePassword = System.getenv("KEYSTORE_PASSWORD") ?: ""
+            keyAlias = System.getenv("KEY_ALIAS") ?: ""
+            keyPassword = System.getenv("KEY_PASSWORD") ?: ""
+        }
+    }
+
     buildFeatures {
         buildConfig = true
         compose = true
@@ -70,6 +79,7 @@ android {
 
     buildTypes {
         release {
+            signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
