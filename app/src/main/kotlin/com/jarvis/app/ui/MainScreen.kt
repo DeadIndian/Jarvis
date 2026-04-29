@@ -6,17 +6,22 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.jarvis.app.HelpBlock
+import com.jarvis.app.LlmSettingsUiState
 import com.jarvis.app.ModelStatusUiState
 import com.jarvis.app.OnDeviceModelStatus
+import com.jarvis.app.LlmBackendMode
 import com.jarvis.intent.CommandExample
 import com.jarvis.intent.CommandSection
 
@@ -29,12 +34,17 @@ fun MainScreen(
     helpOverview: List<HelpBlock>,
     helpCommandSections: List<CommandSection>,
     modelStatusUiState: ModelStatusUiState,
+    settingsUiState: LlmSettingsUiState,
     onTabSelected: (MainTab) -> Unit,
     onUseModelClicked: () -> Unit,
     onModelSelected: (String) -> Unit,
     onRefreshModels: () -> Unit,
     onDownloadModel: (String) -> Unit,
-    onDeleteModel: (String) -> Unit
+    onDeleteModel: (String) -> Unit,
+    onBackendModeSelected: (LlmBackendMode) -> Unit,
+    onGeminiApiKeyChanged: (String) -> Unit,
+    onSaveGeminiApiKey: () -> Unit,
+    onClearGeminiApiKey: () -> Unit
 ) {
     Scaffold(
         topBar = {
@@ -67,6 +77,7 @@ fun MainScreen(
                 MainTab.HOME -> HomeTab(
                     jarvisState = jarvisState,
                     modelStatusUiState = modelStatusUiState,
+                    settingsUiState = settingsUiState,
                     onUseModelClicked = onUseModelClicked
                 )
 
@@ -78,10 +89,15 @@ fun MainScreen(
                 MainTab.LOGS -> LogsTab(logs = logs)
                 MainTab.SETTINGS -> SettingsTab(
                     modelStatusUiState = modelStatusUiState,
+                    settingsUiState = settingsUiState,
                     onRefreshModels = onRefreshModels,
                     onModelSelected = onModelSelected,
                     onDownloadModel = onDownloadModel,
-                    onDeleteModel = onDeleteModel
+                    onDeleteModel = onDeleteModel,
+                    onBackendModeSelected = onBackendModeSelected,
+                    onGeminiApiKeyChanged = onGeminiApiKeyChanged,
+                    onSaveGeminiApiKey = onSaveGeminiApiKey,
+                    onClearGeminiApiKey = onClearGeminiApiKey
                 )
             }
         }
@@ -92,6 +108,7 @@ fun MainScreen(
 private fun HomeTab(
     jarvisState: String,
     modelStatusUiState: ModelStatusUiState,
+    settingsUiState: LlmSettingsUiState,
     onUseModelClicked: () -> Unit
 ) {
     Column(
@@ -110,12 +127,32 @@ private fun HomeTab(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        val isReady = modelStatusUiState.activeModelId != null
+        val isReady = when (settingsUiState.backendMode) {
+            LlmBackendMode.GEMINI_CLOUD -> settingsUiState.hasSavedGeminiApiKey
+            LlmBackendMode.HYBRID -> settingsUiState.hasSavedGeminiApiKey || modelStatusUiState.activeModelId != null
+            else -> modelStatusUiState.activeModelId != null
+        }
+
         Text(
             text = if (isReady) "Model Ready" else "Model Not Initialized",
             color = if (isReady) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
             style = MaterialTheme.typography.bodyMedium
         )
+
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = "Backend: ${settingsUiState.backendMode.label}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        if (settingsUiState.backendMode == LlmBackendMode.GEMINI_CLOUD || settingsUiState.backendMode == LlmBackendMode.HYBRID) {
+            Text(
+                text = if (settingsUiState.hasSavedGeminiApiKey) "Gemini API key configured" else "Gemini API key required",
+                style = MaterialTheme.typography.bodySmall,
+                color = if (settingsUiState.hasSavedGeminiApiKey) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+            )
+        }
 
         Spacer(modifier = Modifier.height(12.dp))
         Text(
@@ -177,16 +214,77 @@ private fun LogsTab(logs: List<String>) {
 @Composable
 private fun SettingsTab(
     modelStatusUiState: ModelStatusUiState,
+    settingsUiState: LlmSettingsUiState,
     onRefreshModels: () -> Unit,
     onModelSelected: (String) -> Unit,
     onDownloadModel: (String) -> Unit,
-    onDeleteModel: (String) -> Unit
+    onDeleteModel: (String) -> Unit,
+    onBackendModeSelected: (LlmBackendMode) -> Unit,
+    onGeminiApiKeyChanged: (String) -> Unit,
+    onSaveGeminiApiKey: () -> Unit,
+    onClearGeminiApiKey: () -> Unit
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
+        item {
+            Text("LLM Backend", fontWeight = FontWeight.Bold)
+            Spacer(modifier = Modifier.height(12.dp))
+            LlmBackendMode.entries.forEach { backend ->
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp)
+                ) {
+                    RadioButton(
+                        selected = settingsUiState.backendMode == backend,
+                        onClick = { onBackendModeSelected(backend) }
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(backend.label)
+                }
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+            if (settingsUiState.backendMode == LlmBackendMode.GEMINI_CLOUD || settingsUiState.backendMode == LlmBackendMode.HYBRID) {
+                Text("Gemini API Key", fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = settingsUiState.geminiApiKey,
+                    onValueChange = onGeminiApiKeyChanged,
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("Enter Gemini API key") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions.Default.copy(capitalization = KeyboardCapitalization.None)
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = onSaveGeminiApiKey, enabled = settingsUiState.geminiApiKey.isNotBlank()) {
+                        Text("Save API Key")
+                    }
+                    OutlinedButton(onClick = onClearGeminiApiKey, enabled = settingsUiState.hasSavedGeminiApiKey) {
+                        Text("Clear Key")
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = if (settingsUiState.hasSavedGeminiApiKey) "Gemini API key is stored securely." else "Save a Gemini key to enable cloud-backed LLM responses.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (settingsUiState.errorMessage != null) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = settingsUiState.errorMessage,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            }
+        }
+
         item {
             Text("Model Settings", fontWeight = FontWeight.Bold)
             Spacer(modifier = Modifier.height(12.dp))

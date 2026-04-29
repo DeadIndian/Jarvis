@@ -5,6 +5,7 @@ enum class LlmBackendMode(
     val label: String
 ) {
     JARVIS_LITERT(id = "litert", label = "Jarvis LiteRT (MediaPipe)"),
+    HYBRID(id = "hybrid", label = "Jarvis LiteRT + Gemini cloud fallback"),
     GOOGLE_AICORE(id = "google-aicore", label = "Google Gemini Nano via AICore"),
     GEMINI_CLOUD(id = "gemini-cloud", label = "Gemini cloud only");
 
@@ -12,6 +13,7 @@ enum class LlmBackendMode(
         fun fromLegacyConfig(raw: String?): LlmBackendMode {
             return when (raw?.trim()?.lowercase()) {
                 "local-only", "local", "litert" -> JARVIS_LITERT
+                "hybrid" -> HYBRID
                 "gemini", "cloud-only", "cloud" -> GEMINI_CLOUD
                 "google-aicore", "aicore" -> GOOGLE_AICORE
                 else -> JARVIS_LITERT

@@ -125,10 +125,11 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
+    implementation("io.ktor:ktor-client-core:2.3.12")
+    implementation("io.ktor:ktor-client-okhttp:2.3.12")
+    implementation("androidx.security:security-crypto:1.0.0")
     // Updated to latest version which supports .litertlm format used by Gemma 3/4
     implementation("com.google.mediapipe:tasks-genai:0.10.33")
-    // MediaPipe Text Embedder for semantic memory retrieval
-    implementation("com.google.mediapipe:tasks-text:0.10.33")
 
     implementation(project(":core"))
     implementation(project(":input"))

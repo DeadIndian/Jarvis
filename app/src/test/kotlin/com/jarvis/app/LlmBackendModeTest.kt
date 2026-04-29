@@ -33,4 +33,11 @@ class LlmBackendModeTest {
         assertEquals(LlmBackendMode.GEMINI_CLOUD, legacyMode)
         assertEquals(LlmBackendMode.GOOGLE_AICORE, newMode)
     }
+
+    @Test
+    fun legacyHybridMapsToHybridMode() {
+        val mode = LlmBackendMode.fromLegacyConfig("hybrid")
+
+        assertEquals(LlmBackendMode.HYBRID, mode)
+    }
 }

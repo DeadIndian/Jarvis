@@ -36,7 +36,12 @@ import com.jarvis.llm.LLMProvider
 import com.jarvis.llm.LocalFirstLLMRouter
 import com.jarvis.llm.providers.MediaPipeLLMProvider
 import com.jarvis.memory.MarkdownFileMemoryStore
-import com.jarvis.memory.embedding.HashingEmbeddingModel
+import com.jarvis.app.LlmSettingsRepository
+import com.jarvis.app.LlmSettingsUiState
+import com.jarvis.app.LlmSettingsViewModel
+import com.jarvis.app.EncryptedLlmSettingsRepository
+import com.jarvis.app.GeminiCloudLLMProvider
+import com.jarvis.app.LlmBackendMode
 import com.jarvis.planner.SimplePlanner
 import com.jarvis.skills.AppLauncherSkill
 import com.jarvis.skills.CurrentTimeSkill
@@ -123,6 +128,8 @@ open class MainActivity : AppCompatActivity() {
             }
         }
     }
+    private lateinit var llmSettingsRepository: LlmSettingsRepository
+    private lateinit var settingsViewModel: LlmSettingsViewModel
     protected var soundPlayer: SoundPlayer? = null
 
     protected open fun onJarvisStateChanged(state: JarvisState) = Unit
@@ -166,6 +173,14 @@ open class MainActivity : AppCompatActivity() {
         soundPlayer = SoundPlayer(this)
         logger = AndroidLogJarvisLogger { line -> runOnUiThread { appendLog(line) } }
         classifierTraceStore = ClassifierTraceStore(this)
+
+        llmSettingsRepository = EncryptedLlmSettingsRepository(applicationContext, logger)
+        settingsViewModel = ViewModelProvider(this, object : ViewModelProvider.Factory {
+            override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T {
+                @Suppress("UNCHECKED_CAST")
+                return LlmSettingsViewModel(llmSettingsRepository, logger) as T
+            }
+        }).get(LlmSettingsViewModel::class.java)
 
         modelManager = LiteRtOnDeviceModelManager(
             context = applicationContext,
@@ -257,12 +272,17 @@ open class MainActivity : AppCompatActivity() {
                         helpOverview = JarvisHelpCatalog.overviewBlocks,
                         helpCommandSections = JarvisHelpCatalog.commandSections,
                         modelStatusUiState = modelUiState,
+                        settingsUiState = settingsViewModel.uiState.collectAsState().value,
                         onTabSelected = { _selectedMainTabFlow.value = it },
                         onUseModelClicked = { initializeModelBackground() },
                         onModelSelected = { modelViewModel.selectModel(it) },
                         onRefreshModels = { modelViewModel.refreshModelList() },
                         onDownloadModel = { modelViewModel.downloadModel(it) },
-                        onDeleteModel = { modelViewModel.deleteModel(it) }
+                        onDeleteModel = { modelViewModel.deleteModel(it) },
+                        onBackendModeSelected = { mode -> settingsViewModel.selectBackendMode(mode); refreshOrchestrator() },
+                        onGeminiApiKeyChanged = { settingsViewModel.updateGeminiApiKey(it) },
+                        onSaveGeminiApiKey = { settingsViewModel.saveGeminiApiKey(); refreshOrchestrator() },
+                        onClearGeminiApiKey = { settingsViewModel.clearGeminiApiKey(); refreshOrchestrator() }
                     )
                 }
             }
@@ -341,20 +361,20 @@ open class MainActivity : AppCompatActivity() {
         queuedEvents.forEach { event -> dispatchToOrchestrator(orch, event) }
     }
 
+    private fun refreshOrchestrator() {
+        lifecycleScope.launch {
+            val orch = buildOrchestrator(warmup = false)
+            attachOrchestrator(orch)
+            appendLog("LLM backend refreshed: ${llmSettingsRepository.getBackendMode().label}")
+        }
+    }
+
     private suspend fun buildOrchestrator(warmup: Boolean): PipelineOrchestrator = withContext(Dispatchers.IO) {
         val installedAppLauncher = InstalledAppLauncher(this@MainActivity)
         val systemControlManager = SystemControlManager(this@MainActivity)
         val memoryBaseDir: Path = File(applicationContext.filesDir, "memory").toPath()
-        // Try to use semantic embeddings via MediaPipe; fall back to hashing if unavailable
-        val embeddingModel: com.jarvis.memory.embedding.EmbeddingModel = try {
-            MediaPipeTextEmbeddingModel(this@MainActivity)
-        } catch (e: Exception) {
-            logger.warn("memory", "MediaPipe embedding unavailable, using hashing fallback", mapOf("error" to (e.message ?: "unknown")))
-            HashingEmbeddingModel()
-        }
         val memoryStore = MarkdownFileMemoryStore(
             baseDirectory = memoryBaseDir,
-            embeddingModel = embeddingModel,
             writesEnabled = false
         )
 
@@ -368,10 +388,12 @@ open class MainActivity : AppCompatActivity() {
             register(HelpCenterSkill(::openHelpCenter))
         }
 
+        val backendMode = llmSettingsRepository.getBackendMode()
+        val geminiApiKey = llmSettingsRepository.getGeminiApiKey()
         val modelId = modelManager.getActiveModelId()
         val modelFile = resolveGpuSafeModelFile(modelId)
-        
-        val localProvider: LLMProvider? = if (modelFile?.exists() == true) {
+
+        val localProvider: LLMProvider? = if (backendMode != LlmBackendMode.GEMINI_CLOUD && modelFile?.exists() == true) {
             val provider = MediaPipeLLMProvider(
                 context = this@MainActivity,
                 modelPath = modelFile.absolutePath,
@@ -387,9 +409,16 @@ open class MainActivity : AppCompatActivity() {
             null
         }
 
+        val cloudProvider: LLMProvider? = when (backendMode) {
+            LlmBackendMode.HYBRID, LlmBackendMode.GEMINI_CLOUD -> geminiApiKey?.let {
+                GeminiCloudLLMProvider(apiKey = it, logger = logger)
+            }
+            else -> null
+        }
+
         val llmRouter = LocalFirstLLMRouter(
             localProvider = localProvider,
-            cloudProvider = null,
+            cloudProvider = cloudProvider,
             logger = logger
         )
 
@@ -424,7 +453,7 @@ open class MainActivity : AppCompatActivity() {
             memoryStore = memoryStore,
             llmRouter = llmRouter,
             remoteAgentClient = remoteAgentClient,
-            allowCloudFallback = false,
+            allowCloudFallback = backendMode == LlmBackendMode.HYBRID || backendMode == LlmBackendMode.GEMINI_CLOUD,
             localMemoryWritesEnabled = false
         )
     }
