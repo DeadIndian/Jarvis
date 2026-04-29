@@ -127,6 +127,8 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-test-manifest")
     // Updated to latest version which supports .litertlm format used by Gemma 3/4
     implementation("com.google.mediapipe:tasks-genai:0.10.33")
+    // MediaPipe Text Embedder for semantic memory retrieval
+    implementation("com.google.mediapipe:tasks-text:0.10.33")
 
     implementation(project(":core"))
     implementation(project(":input"))

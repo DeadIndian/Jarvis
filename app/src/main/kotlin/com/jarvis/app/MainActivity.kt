@@ -36,6 +36,7 @@ import com.jarvis.llm.LLMProvider
 import com.jarvis.llm.LocalFirstLLMRouter
 import com.jarvis.llm.providers.MediaPipeLLMProvider
 import com.jarvis.memory.MarkdownFileMemoryStore
+import com.jarvis.memory.embedding.HashingEmbeddingModel
 import com.jarvis.planner.SimplePlanner
 import com.jarvis.skills.AppLauncherSkill
 import com.jarvis.skills.CurrentTimeSkill
@@ -344,8 +345,16 @@ open class MainActivity : AppCompatActivity() {
         val installedAppLauncher = InstalledAppLauncher(this@MainActivity)
         val systemControlManager = SystemControlManager(this@MainActivity)
         val memoryBaseDir: Path = File(applicationContext.filesDir, "memory").toPath()
+        // Try to use semantic embeddings via MediaPipe; fall back to hashing if unavailable
+        val embeddingModel: com.jarvis.memory.embedding.EmbeddingModel = try {
+            MediaPipeTextEmbeddingModel(this@MainActivity)
+        } catch (e: Exception) {
+            logger.warn("memory", "MediaPipe embedding unavailable, using hashing fallback", mapOf("error" to (e.message ?: "unknown")))
+            HashingEmbeddingModel()
+        }
         val memoryStore = MarkdownFileMemoryStore(
             baseDirectory = memoryBaseDir,
+            embeddingModel = embeddingModel,
             writesEnabled = false
         )
 
