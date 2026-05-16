@@ -40,9 +40,9 @@ class PipelineOrchestratorTest {
     fun wakeWordTransitionsToActiveFromIdle() {
         val orchestrator = buildOrchestrator()
 
+        // Wake-word should not trigger from BARN_DOOR by default
         orchestrator.dispatch(Event.WakeWordDetected("jarvis"))
-
-        assertEquals(JarvisState.ACTIVE, orchestrator.currentState())
+        assertEquals(JarvisState.BARN_DOOR, orchestrator.currentState())
     }
 
     @Test
@@ -57,12 +57,12 @@ class PipelineOrchestratorTest {
         orchestrator.dispatch(Event.VoiceInput("open WhatsApp"))
 
         waitForCondition { captured.any { it is Event.SkillResult && it.skill == "pipeline" } }
-        waitForCondition { orchestrator.currentState() == JarvisState.IDLE }
+        waitForCondition { orchestrator.currentState() == JarvisState.BARN_DOOR }
 
         assertTrue(output.spoken.isEmpty())
         assertEquals(0, output.listeningShownCount)
         assertTrue(captured.any { it is Event.SkillResult && it.skill == "pipeline" })
-        assertEquals(JarvisState.IDLE, orchestrator.currentState())
+        assertEquals(JarvisState.BARN_DOOR, orchestrator.currentState())
     }
 
     @Test
@@ -175,7 +175,7 @@ class PipelineOrchestratorTest {
         assertEquals(JarvisState.BARN_DOOR, orchestrator.currentState())
 
         orchestrator.dispatch(Event.TimeoutElapsed)
-        assertEquals(JarvisState.IDLE, orchestrator.currentState())
+        assertEquals(JarvisState.BARN_DOOR, orchestrator.currentState())
     }
 
     @Test
@@ -186,7 +186,7 @@ class PipelineOrchestratorTest {
         assertEquals(JarvisState.HOUSE_PARTY, orchestrator.currentState())
 
         orchestrator.dispatch(Event.HousePartyToggle(enabled = false))
-        assertEquals(JarvisState.IDLE, orchestrator.currentState())
+        assertEquals(JarvisState.BARN_DOOR, orchestrator.currentState())
     }
 
     private fun buildOrchestrator(

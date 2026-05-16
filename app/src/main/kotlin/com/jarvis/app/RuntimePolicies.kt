@@ -25,7 +25,7 @@ object RuntimeServicePolicy {
         if (previous == current) {
             return RuntimeServiceAction.NONE
         }
-        return if (current == JarvisState.IDLE) {
+        return if (current == JarvisState.BARN_DOOR) {
             RuntimeServiceAction.STOP
         } else {
             RuntimeServiceAction.START
@@ -56,7 +56,8 @@ object WakeWordPolicy {
         if (previous == current) {
             return WakeWordAction.NONE
         }
-        return if (current == JarvisState.IDLE) {
+        // Wake-word should be active only in HOUSE_PARTY per new model.
+        return if (current == JarvisState.HOUSE_PARTY) {
             WakeWordAction.START
         } else {
             WakeWordAction.STOP

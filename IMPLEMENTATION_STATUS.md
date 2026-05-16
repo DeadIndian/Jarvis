@@ -1,8 +1,12 @@
 # JARVIS IMPLEMENTATION STATUS REPORT
 
-**Date**: April 19, 2026  
-**Project**: Jarvis Android Assistant  
-**Architecture**: Modular, Event-Driven, Offline-First
+> ⚠️ **OUTDATED** — Last updated April 19, 2026
+>
+> For the latest status, see [checkpoint.md](checkpoint.md)
+
+**Date**: April 19, 2026
+**Project**: Jarvis Android Assistant
+**Architecture**: Modular, Event-Driven, Online-First (pivoted)
 
 ---
 
@@ -135,7 +139,6 @@ The Jarvis codebase has a **solid foundation with ~70% core functionality implem
 
 **Design Notes**:
 
-- Not using commercial Porcupine (spec recommended Porcupine but implementation uses open-source alternative)
 - Suitable for on-device, offline operation
 
 ---

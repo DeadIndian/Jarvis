@@ -7,6 +7,13 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.BroadcastReceiver
+import android.content.IntentFilter
+import com.jarvis.core.Event
+import com.jarvis.core.JarvisState
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
@@ -15,6 +22,47 @@ class JarvisRuntimeService : Service() {
     override fun onCreate() {
         super.onCreate()
         ensureNotificationChannel()
+        // Register screen on/off receiver to auto-toggle HOUSE_PARTY when screen is off
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_OFF)
+            addAction(Intent.ACTION_SCREEN_ON)
+        }
+        registerReceiver(screenReceiver, filter)
+    }
+
+    override fun onDestroy() {
+        try {
+            unregisterReceiver(screenReceiver)
+        } catch (_: Exception) { }
+        super.onDestroy()
+    }
+
+    private val screenReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            val action = intent?.action ?: return
+            when (action) {
+                Intent.ACTION_SCREEN_OFF -> {
+                    // When screen turns off, enable HOUSE_PARTY if not already enabled
+                    launchOrchestratorDispatch { 
+                        val current = runCatching { JarvisEngine.orchestrator.currentState() }.getOrNull()
+                        if (current != JarvisState.HOUSE_PARTY) JarvisEngine.orchestrator.dispatch(Event.HousePartyToggle(enabled = true))
+                    }
+                }
+                Intent.ACTION_SCREEN_ON -> {
+                    // When screen turns on, disable HOUSE_PARTY if it was enabled
+                    launchOrchestratorDispatch {
+                        val current = runCatching { JarvisEngine.orchestrator.currentState() }.getOrNull()
+                        if (current == JarvisState.HOUSE_PARTY) JarvisEngine.orchestrator.dispatch(Event.HousePartyToggle(enabled = false))
+                    }
+                }
+            }
+        }
+    }
+
+    private fun launchOrchestratorDispatch(block: suspend () -> Unit) {
+        CoroutineScope(Dispatchers.Default).launch { 
+            try { block() } catch (_: Exception) { }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {

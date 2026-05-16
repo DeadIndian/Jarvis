@@ -31,6 +31,8 @@ fun resolveConfigValue(key: String, default: String = ""): String {
 }
 
 val geminiApiKey: String = resolveConfigValue("JARVIS_GEMINI_API_KEY")
+val openAIApiKey: String = resolveConfigValue("JARVIS_OPENAI_API_KEY")
+val anthropicApiKey: String = resolveConfigValue("JARVIS_ANTHROPIC_API_KEY")
 
 val llmBackend: String = resolveConfigValue("JARVIS_LLM_BACKEND", "hybrid")
 
@@ -70,11 +72,19 @@ android {
         versionCode = 1
         versionName = "0.1.0"
         buildConfigField("String", "JARVIS_GEMINI_API_KEY", "\"${esc(geminiApiKey)}\"")
+        buildConfigField("String", "JARVIS_OPENAI_API_KEY", "\"${esc(openAIApiKey)}\"")
+        buildConfigField("String", "JARVIS_ANTHROPIC_API_KEY", "\"${esc(anthropicApiKey)}\"")
         buildConfigField("String", "JARVIS_LLM_BACKEND", "\"${esc(llmBackend)}\"")
         buildConfigField("String", "JARVIS_LITERT_MODEL_DIR", "\"${esc(liteRtModelDir)}\"")
         buildConfigField("String", "JARVIS_HF_TOKEN", "\"${esc(huggingFaceToken)}\"")
         buildConfigField("String", "JARVIS_REMOTE_AGENT_BASE_URL", "\"${esc(remoteAgentBaseUrl)}\"")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+        }
     }
 
     buildTypes {

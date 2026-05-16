@@ -1,11 +1,11 @@
 package com.jarvis.app
 
+import android.content.Intent
 import android.os.Bundle
 import android.view.Gravity
 import android.view.WindowManager
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -19,18 +19,20 @@ import com.jarvis.core.JarvisState
  * the system digital assistant trigger.
  */
 class AssistantOverlayActivity : MainActivity() {
-    private var seenProcessingState: Boolean = false
 
     override fun onJarvisStateChanged(state: JarvisState) {
-        if (state == JarvisState.THINKING || state == JarvisState.SPEAKING) {
-            seenProcessingState = true
-            return
-        }
-
-        // Dismiss overlay after one command lifecycle completes.
-        if ((state == JarvisState.IDLE || state == JarvisState.ACTIVE) && seenProcessingState) {
+        // The overlay only exists to serve a session. If the state returns to BARN_DOOR
+        // while the overlay is visible, we dismiss it.
+        if (state == JarvisState.BARN_DOOR && isActivityResumed) {
             finish()
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        // Reset voice auto-start flag to allow re-triggering listening mode
+        voiceAutoStarted = false
+        maybeAutoStartVoiceMode()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -42,13 +44,12 @@ class AssistantOverlayActivity : MainActivity() {
 
         setContent {
             JarvisTheme(isOverlay = true) {
-                // Transparent background for overlay
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = Color.Transparent
                 ) {
-                    val state = jarvisStateFlow.collectAsState().value
-                    val inputText = jarvisInputTextFlow.collectAsState().value
+                    val state by JarvisEngine.stateFlow.collectAsState()
+                    val inputText by inputTextFlow.collectAsState()
                     
                     OverlayScreen(
                         state = state,

@@ -36,10 +36,19 @@ Planner
         ↓
 Execution Engine (Skills)
         ↓
-Memory + LLM
+Memory (RAG) + LLM
         ↓
 Response (TTS/UI)
 ```
+
+## 1.3 Runtime Model
+
+**Online-First with Offline Fallback:**
+- Primary: Online LLM providers (OpenAI, Anthropic, Gemini, etc.)
+- Per-provider fallback with smart cooldown (e.g., rate limits, credit exhaustion)
+- Offline support retained for no-internet scenarios and future on-device AI improvements
+
+**See Also:** [memory-spec.md](memory-spec.md) for memory/RAG implementation details.
 
 ---
 
@@ -151,6 +160,8 @@ enum class JarvisState {
     IDLE,
     BARN_DOOR,
     ACTIVE,
+    THINKING,
+    SPEAKING,
     HOUSE_PARTY
 }
 ```
@@ -159,12 +170,14 @@ enum class JarvisState {
 
 ## 5.2 Behavior Matrix
 
-| State       | Mic | Wake Word | Overlay  | Notes            |
-| ----------- | --- | --------- | -------- | ---------------- |
-| IDLE        | Off | No        | No       | Minimal          |
-| BARN_DOOR   | On  | No        | Yes      | Manual trigger   |
-| ACTIVE      | On  | No        | Yes      | Conversation     |
-| HOUSE_PARTY | On  | Yes       | Optional | Always listening |
+| State       | Mic | Wake Word | Overlay  | Notes                  |
+| ----------- | --- | --------- | -------- | ---------------------- |
+| IDLE        | Off | No        | No       | Minimal power          |
+| BARN_DOOR   | On  | No        | Yes      | Manual trigger         |
+| ACTIVE      | On  | No        | Yes      | Conversation           |
+| THINKING    | Off | No        | Yes      | Processing request     |
+| SPEAKING    | Off | No        | Yes      | Responding to user     |
+| HOUSE_PARTY | On  | Yes       | Optional | Always listening       |
 
 ---
 
@@ -195,8 +208,9 @@ interface STT {
 
 ## 6.2 Wake Word
 
-- Engine: Porcupine
-- Active only in HOUSE_PARTY
+- [x] **Engine:** Open-source alternative using Android SpeechRecognizer (`OpenWakeWordEngine`)
+- Active in IDLE and ACTIVE states
+- Keyword: "Jarvis"
 
 ---
 
@@ -311,46 +325,53 @@ interface SkillRegistry {
 
 ## 11.1 Design
 
-Markdown (storage) + Embeddings (retrieval)
-
----
+Markdown (storage) + Hash-based embeddings (retrieval)
+**See [memory-spec.md](memory-spec.md) for full details.**
 
 ## 11.2 Layers
 
-- Short-term (RAM)
-- Long-term (Markdown + vector index)
+- Short-term (RAM) - recent conversation context
+- Long-term (Markdown + hash-based vector index)
 
----
-
-## 11.3 Retrieval
+## 11.3 RAG-Inspired Retrieval
 
 ```text
-Query → Embed → Search → Inject into LLM
+Query → Hash Embed → Cosine Similarity Search → Top-K Results → Inject into LLM Context
 ```
+
+**Constraints:** Always respect context window limits (truncate if needed)
 
 ---
 
 # 12. LLM SYSTEM
 
-## 12.1 Local Model
+## 12.1 Online-First with Offline Fallback
 
-- Target: Gemma 2B (quantized)
+**Primary:** Online LLM providers (OpenAI, Anthropic, Google Gemini, etc.)
+- Smart fallback: If provider fails (rate limit, credit exhaustion, unavailable), automatically try next provider
+- Per-provider cooldown: Track failure reasons and wait appropriate time (e.g., 5-24h for credit exhaustion)
+- Offline support: Retained for no-internet scenarios and future on-device AI improvements
 
-## 12.2 Cloud Fallback
+**On-Device Model:**
+- Target: On-device model (quantized) for offline use when on-device AI becomes fast enough
+- Current: Uses LiteRT-compatible models (Gemma, Qwen, etc.) via MediaPipe
+
+## 12.2 LLM Router
 
 ```kotlin
 interface LLMRouter {
-    fun route(request: LLMRequest): LLMProvider
+    suspend fun complete(request: LLMRequest): LLMResponse
+    fun getAvailableProviders(): List<LLMProvider>
+    fun getProviderCooldown(provider: String): Duration
 }
 ```
-
----
 
 ## 12.3 Responsibilities
 
 - Intent parsing (fallback)
 - Planning
 - Response generation
+- Memory context injection (RAG)
 
 ---
 
@@ -364,7 +385,7 @@ interface LLMRouter {
 
 ## 13.2 UI
 
-- Floating overlay bubble
+- Overlay screen (full-screen, not floating bubble)
 - States:
   - Listening
   - Thinking
@@ -376,10 +397,10 @@ interface LLMRouter {
 
 ## 14.1 Required Components
 
-- Foreground Service
-- Accessibility Service
-- Overlay permission
-- Microphone access
+- Foreground Service ✅
+- Overlay Screen ✅
+- Microphone access ✅
+- [ ] **Accessibility Service** — Future scope (for direct system control)
 
 ---
 
@@ -388,6 +409,13 @@ interface LLMRouter {
 - Handle Doze mode
 - Prevent process kill
 - Battery optimization exemptions
+
+---
+
+## 14.3 Overlay
+
+Current: Full-screen overlay activity (not floating bubble)
+Future: May implement floating bubble as an Accessibility Service overlay
 
 ---
 

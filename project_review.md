@@ -157,8 +157,6 @@ android → core, input, output, logging
 - "jarvis" keyword detection supported
 - Media playback monitoring to avoid conflicts
 
-**Note:** Spec recommended Porcupine but implementation uses open-source SpeechRecognizer approach (no external dependency)
-
 ---
 
 ### 4.3 INTENT SYSTEM ⚠️ PARTIAL (40%)

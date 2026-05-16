@@ -104,7 +104,7 @@ class OpenWakeWordEngine(
         logger.info("wakeword", "Wake-word engine stopped")
     }
 
-    fun release() {
+    override fun release() {
         stop()
         recognizer?.destroy()
     }

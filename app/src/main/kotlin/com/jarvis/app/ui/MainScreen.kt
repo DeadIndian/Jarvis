@@ -17,8 +17,11 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Folder
 import com.jarvis.app.HelpBlock
 import com.jarvis.app.LlmSettingsUiState
+import com.jarvis.app.MemorySettingsUiState
 import com.jarvis.app.ModelStatusUiState
 import com.jarvis.app.OnDeviceModelStatus
 import com.jarvis.app.LlmBackendMode
@@ -35,6 +38,7 @@ fun MainScreen(
     helpCommandSections: List<CommandSection>,
     modelStatusUiState: ModelStatusUiState,
     settingsUiState: LlmSettingsUiState,
+    memorySettingsUiState: MemorySettingsUiState,
     onTabSelected: (MainTab) -> Unit,
     onUseModelClicked: () -> Unit,
     onModelSelected: (String) -> Unit,
@@ -44,7 +48,11 @@ fun MainScreen(
     onBackendModeSelected: (LlmBackendMode) -> Unit,
     onGeminiApiKeyChanged: (String) -> Unit,
     onSaveGeminiApiKey: () -> Unit,
-    onClearGeminiApiKey: () -> Unit
+    onClearGeminiApiKey: () -> Unit,
+    onMemoryFolderChanged: (String) -> Unit,
+    onSelectMemoryFolder: () -> Unit,
+    onSaveMemoryFolder: () -> Unit,
+    onClearMemoryFolder: () -> Unit
 ) {
     Scaffold(
         topBar = {
@@ -90,6 +98,7 @@ fun MainScreen(
                 MainTab.SETTINGS -> SettingsTab(
                     modelStatusUiState = modelStatusUiState,
                     settingsUiState = settingsUiState,
+                    memorySettingsUiState = memorySettingsUiState,
                     onRefreshModels = onRefreshModels,
                     onModelSelected = onModelSelected,
                     onDownloadModel = onDownloadModel,
@@ -97,7 +106,11 @@ fun MainScreen(
                     onBackendModeSelected = onBackendModeSelected,
                     onGeminiApiKeyChanged = onGeminiApiKeyChanged,
                     onSaveGeminiApiKey = onSaveGeminiApiKey,
-                    onClearGeminiApiKey = onClearGeminiApiKey
+                    onClearGeminiApiKey = onClearGeminiApiKey,
+                    onMemoryFolderChanged = onMemoryFolderChanged,
+                    onSelectMemoryFolder = onSelectMemoryFolder,
+                    onSaveMemoryFolder = onSaveMemoryFolder,
+                    onClearMemoryFolder = onClearMemoryFolder
                 )
             }
         }
@@ -215,6 +228,7 @@ private fun LogsTab(logs: List<String>) {
 private fun SettingsTab(
     modelStatusUiState: ModelStatusUiState,
     settingsUiState: LlmSettingsUiState,
+    memorySettingsUiState: MemorySettingsUiState,
     onRefreshModels: () -> Unit,
     onModelSelected: (String) -> Unit,
     onDownloadModel: (String) -> Unit,
@@ -222,7 +236,11 @@ private fun SettingsTab(
     onBackendModeSelected: (LlmBackendMode) -> Unit,
     onGeminiApiKeyChanged: (String) -> Unit,
     onSaveGeminiApiKey: () -> Unit,
-    onClearGeminiApiKey: () -> Unit
+    onClearGeminiApiKey: () -> Unit,
+    onMemoryFolderChanged: (String) -> Unit,
+    onSelectMemoryFolder: () -> Unit,
+    onSaveMemoryFolder: () -> Unit,
+    onClearMemoryFolder: () -> Unit
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -282,6 +300,59 @@ private fun SettingsTab(
                         color = MaterialTheme.colorScheme.error
                     )
                 }
+            }
+        }
+
+            // Memory / Notes Folder Settings
+        item {
+            Spacer(modifier = Modifier.height(24.dp))
+            Text("Memory / Notes", fontWeight = FontWeight.Bold)
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                "Notes are stored in app storage by default. You can choose a custom folder from your device storage.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            OutlinedTextField(
+                value = memorySettingsUiState.notesFolderPath,
+                onValueChange = onMemoryFolderChanged,
+                modifier = Modifier.fillMaxWidth(),
+                placeholder = { Text("Folder name or path") },
+                singleLine = true,
+                trailingIcon = {
+                    IconButton(onClick = onSelectMemoryFolder) {
+                        Icon(
+                            imageVector = Icons.Default.Folder,
+                            contentDescription = "Select Folder"
+                        )
+                    }
+                }
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = onSaveMemoryFolder, enabled = memorySettingsUiState.notesFolderPath.isNotBlank()) {
+                    Text("Save Folder")
+                }
+                OutlinedButton(onClick = onClearMemoryFolder) {
+                    Text("Reset to Default")
+                }
+            }
+            if (memorySettingsUiState.successMessage != null) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = memorySettingsUiState.successMessage,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+            if (memorySettingsUiState.errorMessage != null) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = memorySettingsUiState.errorMessage,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
             }
         }
 

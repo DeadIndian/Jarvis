@@ -47,6 +47,17 @@ class SimplePlanner : Planner {
                     )
                 )
             }
+
+            "REMEMBER" -> {
+                Plan(
+                    steps = listOf(
+                        PlanStep(
+                            skill = "RememberInfo",
+                            input = entities
+                        )
+                    )
+                )
+            }
             
             "CONVERSATIONAL_RESPONSE", "SPEAK" -> {
                 // No skill execution required; orchestrator will speak the provided text directly.

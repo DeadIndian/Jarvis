@@ -35,17 +35,16 @@ class PipelineOrchestrator(
     private val retrievalLimit: Int = 3,
     private val localMemoryWritesEnabled: Boolean = true
 ) : Orchestrator {
-    private var state: JarvisState = JarvisState.IDLE
+    private var state: JarvisState = JarvisState.BARN_DOOR
     private val registeredSkills = mutableSetOf<String>()
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     
     private val allowedTransitions = mapOf(
-        JarvisState.IDLE to setOf(JarvisState.BARN_DOOR, JarvisState.HOUSE_PARTY, JarvisState.ACTIVE, JarvisState.THINKING),
-        JarvisState.BARN_DOOR to setOf(JarvisState.ACTIVE, JarvisState.IDLE, JarvisState.HOUSE_PARTY, JarvisState.THINKING),
-        JarvisState.ACTIVE to setOf(JarvisState.IDLE, JarvisState.HOUSE_PARTY, JarvisState.THINKING),
-        JarvisState.THINKING to setOf(JarvisState.SPEAKING, JarvisState.IDLE, JarvisState.ACTIVE),
-        JarvisState.SPEAKING to setOf(JarvisState.IDLE, JarvisState.ACTIVE, JarvisState.THINKING),
-        JarvisState.HOUSE_PARTY to setOf(JarvisState.ACTIVE, JarvisState.IDLE, JarvisState.THINKING)
+        JarvisState.BARN_DOOR to setOf(JarvisState.ACTIVE, JarvisState.HOUSE_PARTY, JarvisState.THINKING),
+        JarvisState.ACTIVE to setOf(JarvisState.BARN_DOOR, JarvisState.HOUSE_PARTY, JarvisState.THINKING),
+        JarvisState.THINKING to setOf(JarvisState.SPEAKING, JarvisState.BARN_DOOR, JarvisState.ACTIVE),
+        JarvisState.SPEAKING to setOf(JarvisState.BARN_DOOR, JarvisState.ACTIVE, JarvisState.THINKING),
+        JarvisState.HOUSE_PARTY to setOf(JarvisState.ACTIVE, JarvisState.BARN_DOOR, JarvisState.THINKING)
     )
 
     fun currentState(): JarvisState = state
@@ -55,24 +54,25 @@ class PipelineOrchestrator(
             is Event.VoiceInput -> scope.launch { processInput(event.text, isVoiceInput = true) }
             is Event.TextInput -> scope.launch { processInput(event.text, isVoiceInput = false) }
             is Event.WakeWordDetected -> {
-                if (state == JarvisState.HOUSE_PARTY || state == JarvisState.IDLE) {
+                // Wake-word only triggers when in HOUSE_PARTY (continuous listening) per new policy.
+                if (state == JarvisState.HOUSE_PARTY) {
                     transitionState(JarvisState.ACTIVE)
                 } else {
                     logger.warn(
                         "state",
-                        "Wake word ignored",
+                        "Wake word ignored (not in HOUSE_PARTY)",
                         mapOf("currentState" to state.name)
                     )
                 }
             }
 
             Event.PowerButtonHeld -> transitionState(JarvisState.BARN_DOOR)
-            Event.TimeoutElapsed -> transitionState(JarvisState.IDLE)
+            Event.TimeoutElapsed -> transitionState(JarvisState.BARN_DOOR)
             is Event.HousePartyToggle -> {
                 if (event.enabled) {
                     transitionState(JarvisState.HOUSE_PARTY)
                 } else {
-                    transitionState(JarvisState.IDLE)
+                    transitionState(JarvisState.BARN_DOOR)
                 }
             }
 
@@ -157,7 +157,7 @@ class PipelineOrchestrator(
                 outputChannel.showSpeaking()
                 outputChannel.speak(spokenText)
             } else {
-                transitionState(JarvisState.IDLE)
+                transitionState(JarvisState.BARN_DOOR)
             }
 
             if (executionMode == ExecutionMode.LOCAL_FAST && localMemoryWritesEnabled) {
@@ -193,11 +193,11 @@ class PipelineOrchestrator(
                     }
                 }
             } else {
-                // Text interactions can return to idle after a delay to clear the UI/notification.
+                // Text interactions can return to BARN_DOOR after a delay to clear the UI/notification.
                 scope.launch {
                     delay(10000)
                     if (state == JarvisState.SPEAKING || state == JarvisState.THINKING) {
-                        transitionState(JarvisState.IDLE)
+                        transitionState(JarvisState.BARN_DOOR)
                     }
                 }
             }

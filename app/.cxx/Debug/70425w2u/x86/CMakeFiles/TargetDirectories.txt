@@ -1,0 +1,3 @@
+/home/dead/Projects/OpenSource/Jarvis/app/.cxx/Debug/70425w2u/x86/CMakeFiles/webrtc_vad_jni.dir
+/home/dead/Projects/OpenSource/Jarvis/app/.cxx/Debug/70425w2u/x86/CMakeFiles/edit_cache.dir
+/home/dead/Projects/OpenSource/Jarvis/app/.cxx/Debug/70425w2u/x86/CMakeFiles/rebuild_cache.dir

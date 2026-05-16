@@ -10,9 +10,18 @@ import com.jarvis.logging.NoOpJarvisLogger
 interface LlmSettingsRepository {
     fun getBackendMode(): LlmBackendMode
     fun setBackendMode(mode: LlmBackendMode)
+
     fun getGeminiApiKey(): String?
     fun saveGeminiApiKey(apiKey: String)
     fun clearGeminiApiKey()
+
+    fun getOpenAIApiKey(): String?
+    fun saveOpenAIApiKey(apiKey: String)
+    fun clearOpenAIApiKey()
+
+    fun getAnthropicApiKey(): String?
+    fun saveAnthropicApiKey(apiKey: String)
+    fun clearAnthropicApiKey()
 }
 
 class EncryptedLlmSettingsRepository(
@@ -23,6 +32,8 @@ class EncryptedLlmSettingsRepository(
         private const val PREFS_NAME = "jarvis_llm_settings"
         private const val KEY_BACKEND_MODE = "backendMode"
         private const val KEY_GEMINI_API_KEY = "geminiApiKey"
+        private const val KEY_OPENAI_API_KEY = "openaiApiKey"
+        private const val KEY_ANTHROPIC_API_KEY = "anthropicApiKey"
     }
 
     private val sharedPreferences: SharedPreferences by lazy {
@@ -65,5 +76,37 @@ class EncryptedLlmSettingsRepository(
     override fun clearGeminiApiKey() {
         sharedPreferences.edit().remove(KEY_GEMINI_API_KEY).apply()
         logger.info("llm_settings", "Gemini API key cleared", emptyMap())
+    }
+
+    override fun getOpenAIApiKey(): String? {
+        return sharedPreferences.getString(KEY_OPENAI_API_KEY, null)
+            ?.takeUnless { it.isBlank() }
+            ?: BuildConfig.JARVIS_OPENAI_API_KEY.takeIf { it.isNotBlank() }
+    }
+
+    override fun saveOpenAIApiKey(apiKey: String) {
+        sharedPreferences.edit().putString(KEY_OPENAI_API_KEY, apiKey.trim()).apply()
+        logger.info("llm_settings", "OpenAI API key saved", emptyMap())
+    }
+
+    override fun clearOpenAIApiKey() {
+        sharedPreferences.edit().remove(KEY_OPENAI_API_KEY).apply()
+        logger.info("llm_settings", "OpenAI API key cleared", emptyMap())
+    }
+
+    override fun getAnthropicApiKey(): String? {
+        return sharedPreferences.getString(KEY_ANTHROPIC_API_KEY, null)
+            ?.takeUnless { it.isBlank() }
+            ?: BuildConfig.JARVIS_ANTHROPIC_API_KEY.takeIf { it.isNotBlank() }
+    }
+
+    override fun saveAnthropicApiKey(apiKey: String) {
+        sharedPreferences.edit().putString(KEY_ANTHROPIC_API_KEY, apiKey.trim()).apply()
+        logger.info("llm_settings", "Anthropic API key saved", emptyMap())
+    }
+
+    override fun clearAnthropicApiKey() {
+        sharedPreferences.edit().remove(KEY_ANTHROPIC_API_KEY).apply()
+        logger.info("llm_settings", "Anthropic API key cleared", emptyMap())
     }
 }

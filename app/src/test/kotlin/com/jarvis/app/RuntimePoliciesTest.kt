@@ -7,14 +7,14 @@ import kotlin.test.assertEquals
 class RuntimePoliciesTest {
     @Test
     fun runtimePolicyStartsServiceWhenEnteringActiveState() {
-        val action = RuntimeServicePolicy.decide(previous = JarvisState.IDLE, current = JarvisState.ACTIVE)
+        val action = RuntimeServicePolicy.decide(previous = JarvisState.BARN_DOOR, current = JarvisState.ACTIVE)
 
         assertEquals(RuntimeServiceAction.START, action)
     }
 
     @Test
     fun runtimePolicyStopsServiceWhenReturningToIdle() {
-        val action = RuntimeServicePolicy.decide(previous = JarvisState.HOUSE_PARTY, current = JarvisState.IDLE)
+        val action = RuntimeServicePolicy.decide(previous = JarvisState.HOUSE_PARTY, current = JarvisState.BARN_DOOR)
 
         assertEquals(RuntimeServiceAction.STOP, action)
     }
@@ -48,10 +48,10 @@ class RuntimePoliciesTest {
     }
 
     @Test
-    fun wakeWordPolicyStopsInHouseParty() {
-        val action = WakeWordPolicy.decide(previous = JarvisState.ACTIVE, current = JarvisState.HOUSE_PARTY)
+    fun wakeWordPolicyStartsInHouseParty() {
+        val action = WakeWordPolicy.decide(previous = JarvisState.BARN_DOOR, current = JarvisState.HOUSE_PARTY)
 
-        assertEquals(WakeWordAction.STOP, action)
+        assertEquals(WakeWordAction.START, action)
     }
 
     @Test
@@ -59,13 +59,6 @@ class RuntimePoliciesTest {
         val action = WakeWordPolicy.decide(previous = JarvisState.HOUSE_PARTY, current = JarvisState.ACTIVE)
 
         assertEquals(WakeWordAction.STOP, action)
-    }
-
-    @Test
-    fun wakeWordPolicyStartsInIdle() {
-        val action = WakeWordPolicy.decide(previous = JarvisState.HOUSE_PARTY, current = JarvisState.IDLE)
-
-        assertEquals(WakeWordAction.START, action)
     }
 
     @Test

@@ -132,26 +132,38 @@ interface EmbeddingModel {
 }
 ```
 
----
+**Current Implementation:** `HashingEmbeddingModel`
+- Uses MurmurHash3 for deterministic hashing
+- 384 dimensions, L2-normalized for cosine similarity
+- Zero external dependencies, no model download required
+- Speed: < 5ms per embedding on mobile
 
-## 5.2 Requirements
+**Rationale:** Neural embedding models are too slow for mobile. Using feature hashing instead.
 
-- Must support **on-device inference**
-- Quantized model preferred (4-bit / 8-bit)
-- Max embedding size: 384–768 dimensions
+- Uses **feature hashing** (hashing trick) to generate fixed-dimension vectors
+- Output: 384-dimension L2-normalized float arrays
+- Deterministic (same text → same vector)
+- Zero external dependencies
 
----
+**Future Enhancement:** Can swap `EmbeddingModel` implementation to use neural model when on-device AI improves.
 
 ## 5.3 Execution Strategy
 
 - Synchronous for small batches
 - Batch processing for indexing
+- Cosine similarity via dot product (vectors are normalized)
 
 ---
 
-# 6. VECTOR STORAGE (SQLITE)
+# 6. VECTOR STORAGE
 
-## 6.1 Database Schema
+## 6.1 Storage Options
+
+- **Desktop/Test:** SQLite via JDBC
+- **Android:** AndroidSqliteVectorStore or in-memory fallback
+- In-memory vector store available for simplicity
+
+## 6.2 Database Schema
 
 ```sql
 CREATE TABLE memory_chunks (
@@ -230,6 +242,8 @@ score = (similarity * 0.7)
 
 # 8. WRITE / UPDATE PIPELINE
 
+**Status:** Interface defined, not yet integrated (write operations disabled)
+
 ## 8.1 Write Interface
 
 ```kotlin
@@ -273,7 +287,7 @@ LLM Output
 Relevant Memory:
 
 [1] (projects.md - Decisions)
-Using Porcupine for wake word...
+Using OpenWakeWord for wake word...
 
 [2] (user.md - Preferences)
 User prefers offline-first systems...

@@ -35,6 +35,19 @@ class RuleBasedIntentRouter : IntentRouter {
                 )
             }
 
+            normalized.startsWith("remember ") || normalized.contains(" remember ") -> {
+                val info = if (normalized.startsWith("remember ")) {
+                    input.substring("remember ".length).trim()
+                } else {
+                    input.substringAfter("remember ").trim()
+                }
+                IntentResult(
+                    intent = "REMEMBER",
+                    confidence = 0.9,
+                    entities = mapOf("info" to info)
+                )
+            }
+
             else -> IntentResult(
                 intent = "UNKNOWN",
                 confidence = 0.3,
@@ -184,6 +197,7 @@ class RuleBasedIntentRouter : IntentRouter {
             DND_TOKENS.any { normalized.contains(it) } -> "dnd"
             MOBILE_DATA_TOKENS.any { normalized.contains(it) } -> "mobile_data"
             LOCATION_TOKENS.any { normalized.contains(it) } -> "location"
+            HOUSE_PARTY_TOKENS.any { normalized.contains(it) } -> "house_party"
             AIRPLANE_TOKENS.any { normalized.contains(it) } -> "airplane_mode"
             SETTINGS_TOKENS.any { normalized.contains(it) } -> "settings"
             else -> null
@@ -311,6 +325,7 @@ class RuleBasedIntentRouter : IntentRouter {
         private val LOCATION_TOKENS = listOf("location", "gps")
         private val AIRPLANE_TOKENS = listOf("airplane mode", "flight mode")
         private val SETTINGS_TOKENS = listOf("settings", "setting")
+        private val HOUSE_PARTY_TOKENS = listOf("house party", "house-party", "continuous listening", "always listening", "always listen", "keep listening", "continuous voice", "continuous listen", "live conversation", "continuous mode")
 
         private val ON_TOKENS = listOf("turn on", "enable", "start", "on")
         private val OFF_TOKENS = listOf("turn off", "disable", "stop", "off")

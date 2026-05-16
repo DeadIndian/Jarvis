@@ -1,6 +1,8 @@
 package com.jarvis.app
 
 import android.content.Context
+import com.jarvis.core.Event
+import com.jarvis.core.JarvisState
 import android.content.Intent
 import android.net.Uri
 import android.hardware.camera2.CameraCharacteristics
@@ -21,6 +23,27 @@ class SystemControlManager(context: Context) {
         val target = input["target"].orEmpty()
         val action = input["action"].orEmpty()
         return when (target.lowercase()) {
+            "house_party" -> {
+                when (action.uppercase()) {
+                    "ON" -> {
+                        JarvisEngine.orchestrator.dispatch(Event.HousePartyToggle(enabled = true))
+                        "Continuous listening enabled"
+                    }
+                    "OFF" -> {
+                        JarvisEngine.orchestrator.dispatch(Event.HousePartyToggle(enabled = false))
+                        "Continuous listening disabled"
+                    }
+                    "TOGGLE" -> {
+                        val isOn = JarvisEngine.orchestrator.currentState() == JarvisState.HOUSE_PARTY
+                        JarvisEngine.orchestrator.dispatch(Event.HousePartyToggle(enabled = !isOn))
+                        if (!isOn) "Continuous listening enabled" else "Continuous listening disabled"
+                    }
+                    else -> {
+                        val isOn = JarvisEngine.orchestrator.currentState() == JarvisState.HOUSE_PARTY
+                        if (isOn) "Continuous listening is currently enabled" else "Continuous listening is currently disabled"
+                    }
+                }
+            }
             "flashlight" -> handleFlashlight(action)
             "bluetooth" -> openBluetoothControls(action)
             "hotspot" -> openHotspotControls(action)
