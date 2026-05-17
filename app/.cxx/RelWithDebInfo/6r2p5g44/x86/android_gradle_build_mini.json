@@ -1,0 +1,27 @@
+{
+  "buildFiles": [
+    "/home/dead/Projects/OpenSource/Jarvis/app/src/main/cpp/CMakeLists.txt"
+  ],
+  "cleanCommandsComponents": [
+    [
+      "/home/dead/Android/Sdk/cmake/3.22.1/bin/ninja",
+      "-C",
+      "/home/dead/Projects/OpenSource/Jarvis/app/.cxx/RelWithDebInfo/6r2p5g44/x86",
+      "clean"
+    ]
+  ],
+  "buildTargetsCommandComponents": [
+    "/home/dead/Android/Sdk/cmake/3.22.1/bin/ninja",
+    "-C",
+    "/home/dead/Projects/OpenSource/Jarvis/app/.cxx/RelWithDebInfo/6r2p5g44/x86",
+    "{LIST_OF_TARGETS_TO_BUILD}"
+  ],
+  "libraries": {
+    "webrtc_vad_jni::@6890427a1f51a3e7e1df": {
+      "artifactName": "webrtc_vad_jni",
+      "abi": "x86",
+      "output": "/home/dead/Projects/OpenSource/Jarvis/app/build/intermediates/cxx/RelWithDebInfo/6r2p5g44/obj/x86/libwebrtc_vad_jni.so",
+      "runtimeFiles": []
+    }
+  }
+}

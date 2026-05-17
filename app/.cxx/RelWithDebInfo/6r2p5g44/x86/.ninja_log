@@ -1,0 +1,4 @@
+# ninja log v5
+0	48	1779022121474256417	CMakeFiles/webrtc_vad_jni.dir/simple_vad.c.o	fdb1f11f805c5a14
+0	49	1779022121479256481	CMakeFiles/webrtc_vad_jni.dir/webrtc_vad_jni.cpp.o	f7dc3ac991a5c05b
+49	116	1779022121521257020	/home/dead/Projects/OpenSource/Jarvis/app/build/intermediates/cxx/RelWithDebInfo/6r2p5g44/obj/x86/libwebrtc_vad_jni.so	ded7e0d82ad9af84

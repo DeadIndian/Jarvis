@@ -10,11 +10,12 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.time.Duration
 import java.time.Instant
+import java.util.concurrent.ConcurrentHashMap
 
 class LLMProviderManager(
     private val logger: JarvisLogger = NoOpJarvisLogger
 ) : LLMRouter {
-    private val providerStates = mutableMapOf<String, ProviderState>()
+    private val providerStates = ConcurrentHashMap<String, ProviderState>()
     private val mutex = Mutex()
     private var providers: List<LLMProvider> = emptyList()
 
