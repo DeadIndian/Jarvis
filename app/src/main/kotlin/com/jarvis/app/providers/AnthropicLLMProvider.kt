@@ -1,16 +1,20 @@
 package com.jarvis.app.providers
 
+import com.jarvis.llm.LLMException
 import com.jarvis.llm.LLMProvider
 import com.jarvis.logging.JarvisLogger
 import com.jarvis.logging.NoOpJarvisLogger
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.request.*
+import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpStatusCode
 import io.ktor.http.content.TextContent
 import org.json.JSONObject
+import java.time.Duration
 import java.util.concurrent.TimeUnit
 
 class AnthropicLLMProvider(
@@ -45,30 +49,61 @@ class AnthropicLLMProvider(
             put("temperature", 0.7)
         }
 
-        val responseText = try {
+        val response = try {
             client.post(url) {
                 header("x-api-key", apiKey)
                 header("anthropic-version", "2023-06-01")
                 header(HttpHeaders.ContentType, "application/json")
                 setBody(TextContent(requestBody.toString(), ContentType.Application.Json))
-            }.bodyAsText()
+            }
         } catch (exception: Exception) {
             logger.warn(
                 stage = "llm",
                 message = "Anthropic request failed",
                 data = mapOf("error" to exception.message)
             )
-            throw ProviderException("Anthropic request failed: ${exception.message}", exception)
+            throw LLMException.NetworkError("Anthropic request failed: ${exception.message}", exception)
+        }
+
+        val responseText = response.bodyAsText()
+        if (response.status.value !in 200..299) {
+            handleErrorResponse(response, responseText)
         }
 
         val output = extractAnthropicText(responseText)
         if (output.isBlank()) {
-            val errorMsg = parseErrorMessage(responseText) ?: "Anthropic returned an empty response"
-            logger.warn("llm", "Anthropic response error", mapOf("error" to errorMsg, "response" to responseText))
-            throw ProviderException(errorMsg)
+            logger.warn("llm", "Anthropic returned an empty response", mapOf("response" to responseText))
+            throw LLMException.UnknownError("Anthropic returned an empty response")
         }
         logger.info("llm", "Anthropic response received", mapOf("outputLength" to output.length))
         return output
+    }
+
+    private fun handleErrorResponse(response: HttpResponse, body: String) {
+        val errorJson = try {
+            JSONObject(body).optJSONObject("error")
+        } catch (_: Exception) {
+            null
+        }
+
+        val message = errorJson?.optString("message") ?: "HTTP ${response.status.value}: $body"
+        val errorType = errorJson?.optString("type") ?: ""
+        
+        val retryAfter = response.headers["retry-after"]?.toLongOrNull()?.let { Duration.ofSeconds(it) }
+
+        when (response.status.value) {
+            400 -> throw LLMException.InvalidRequest(message)
+            401 -> throw LLMException.AuthenticationFailed(message)
+            403 -> throw LLMException.AuthenticationFailed(message)
+            429 -> throw LLMException.RateLimitReached(retryAfter, message)
+            in 500..599 -> {
+                if (response.status.value == 529) {
+                    throw LLMException.ServerError(retryAfter, "Anthropic is overloaded: $message")
+                }
+                throw LLMException.ServerError(retryAfter, message)
+            }
+            else -> throw LLMException.UnknownError(message)
+        }
     }
 
     private fun extractAnthropicText(responseText: String): String {
@@ -90,16 +125,4 @@ class AnthropicLLMProvider(
             ""
         }
     }
-
-    private fun parseErrorMessage(responseText: String): String? {
-        return try {
-            val root = JSONObject(responseText)
-            val error = root.optJSONObject("error")
-            error?.optString("message")
-        } catch (e: Exception) {
-            null
-        }
-    }
-
-    class ProviderException(message: String, cause: Throwable? = null) : Exception(message, cause)
 }

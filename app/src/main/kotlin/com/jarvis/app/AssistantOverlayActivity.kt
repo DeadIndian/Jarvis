@@ -5,14 +5,24 @@ import android.os.Bundle
 import android.view.Gravity
 import android.view.WindowManager
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.lifecycle.lifecycleScope
+import com.jarvis.app.ui.FolderSetupDialog
+import com.jarvis.app.ui.MalformedFilesDialog
+import com.jarvis.app.ui.FolderSetupProgressDialog
+import com.jarvis.app.ui.FolderSetupResultDialog
 import com.jarvis.app.ui.OverlayScreen
 import com.jarvis.app.ui.theme.JarvisTheme
 import com.jarvis.core.JarvisState
+import com.jarvis.app.GeminiCloudLLMProvider
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * Assistant entry activity shown as an overlay when Jarvis is launched via
@@ -20,11 +30,26 @@ import com.jarvis.core.JarvisState
  */
 class AssistantOverlayActivity : MainActivity() {
 
+    private var hasBeenActive = false
+
     override fun onJarvisStateChanged(state: JarvisState) {
+        // Track if we've moved out of the initial BARN_DOOR state
+        if (state != JarvisState.BARN_DOOR) {
+            hasBeenActive = true
+        }
+
         // The overlay only exists to serve a session. If the state returns to BARN_DOOR
-        // while the overlay is visible, we dismiss it.
-        if (state == JarvisState.BARN_DOOR && isActivityResumed) {
-            finish()
+        // after being active, we dismiss it.
+        // We add a check for SPEAKING/THINKING to avoid closing while processing.
+        if (hasBeenActive && state == JarvisState.BARN_DOOR && isActivityResumed) {
+            // Check if we are actually done or just transitioned briefly
+            lifecycleScope.launch {
+                delay(800) // Slightly longer delay to be safe
+                val currentState = JarvisEngine.stateFlow.value
+                if (currentState == JarvisState.BARN_DOOR) {
+                    finish()
+                }
+            }
         }
     }
 
@@ -32,6 +57,7 @@ class AssistantOverlayActivity : MainActivity() {
         super.onNewIntent(intent)
         // Reset voice auto-start flag to allow re-triggering listening mode
         voiceAutoStarted = false
+        hasBeenActive = false
         maybeAutoStartVoiceMode()
     }
 
@@ -50,11 +76,57 @@ class AssistantOverlayActivity : MainActivity() {
                 ) {
                     val state by JarvisEngine.stateFlow.collectAsState()
                     val inputText by inputTextFlow.collectAsState()
+                    val folderSetupUiState by folderSetupViewModel.uiState.collectAsState()
                     
-                    OverlayScreen(
-                        state = state,
-                        inputText = inputText
-                    )
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        OverlayScreen(
+                            state = state,
+                            inputText = inputText,
+                            modifier = Modifier.align(Alignment.BottomCenter)
+                        )
+
+                        // Also include setup dialogs if they trigger while overlay is active
+                        FolderSetupDialog(
+                            uiState = folderSetupUiState,
+                            onFormatFolder = {
+                                folderSetupViewModel.setupFolder(JarvisEngine.getNotesBasePath(this@AssistantOverlayActivity)) {
+                                    JarvisEngine.folderSetupHandled()
+                                    refreshOrchestrator()
+                                }
+                            },
+                            onDismiss = { folderSetupViewModel.dismissDialogs() }
+                        )
+
+                        MalformedFilesDialog(
+                            uiState = folderSetupUiState,
+                            onOrganizeWithAI = {
+                                val apiKey = settingsViewModel.uiState.value.geminiApiKey
+                                if (apiKey.isNotBlank()) {
+                                    val provider = GeminiCloudLLMProvider(apiKey = apiKey, logger = logger)
+                                    folderSetupViewModel.classifyAndOrganizeFiles(
+                                        JarvisEngine.getNotesBasePath(this@AssistantOverlayActivity),
+                                        provider
+                                    ) {
+                                        JarvisEngine.folderSetupHandled()
+                                        refreshOrchestrator()
+                                    }
+                                } else {
+                                    folderSetupViewModel.skipOrganizingFiles()
+                                }
+                            },
+                            onSkip = { folderSetupViewModel.skipOrganizingFiles() }
+                        )
+
+                        FolderSetupProgressDialog(
+                            uiState = folderSetupUiState,
+                            onDismiss = { }
+                        )
+
+                        FolderSetupResultDialog(
+                            uiState = folderSetupUiState,
+                            onDismiss = { folderSetupViewModel.clearMessages() }
+                        )
+                    }
                 }
             }
         }

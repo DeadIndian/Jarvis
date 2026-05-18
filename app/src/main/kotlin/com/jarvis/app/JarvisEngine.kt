@@ -13,7 +13,7 @@ import com.jarvis.intent.LLMIntentRouter
 import com.jarvis.intent.RuleBasedIntentRouter
 import com.jarvis.llm.LLMProvider
 import com.jarvis.logging.JarvisLogger
-import com.jarvis.memory.MarkdownFileMemoryStore
+import com.jarvis.memory.BrainMemoryStore
 import com.jarvis.planner.SimplePlanner
 import com.jarvis.skills.AppLauncherSkill
 import com.jarvis.skills.CurrentTimeSkill
@@ -29,12 +29,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.io.File
-import java.nio.file.Path
-import java.nio.file.Paths
+import java.util.concurrent.atomic.AtomicBoolean
 
 object JarvisEngine {
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var initialized = false
+    private val folderSetupChecked = AtomicBoolean(false)
 
     lateinit var eventBus: EventBus
         private set
@@ -50,6 +50,8 @@ object JarvisEngine {
         private set
     lateinit var logger: JarvisLogger
         private set
+    lateinit var folderSetupManager: FolderSetupManager
+        private set
     
     lateinit var wakeWordEngine: OpenWakeWordEngine
         private set
@@ -61,6 +63,9 @@ object JarvisEngine {
 
     private val _inputTextFlow = MutableStateFlow("")
     val inputTextFlow: StateFlow<String> = _inputTextFlow.asStateFlow()
+
+    private val _folderSetupResult = MutableStateFlow<FolderSetupResult?>(null)
+    val folderSetupResult: StateFlow<FolderSetupResult?> = _folderSetupResult.asStateFlow()
 
     fun init(context: Context, jarvisLogger: JarvisLogger) {
         if (initialized) return
@@ -77,6 +82,7 @@ object JarvisEngine {
             modelDirectoryPath = BuildConfig.JARVIS_LITERT_MODEL_DIR,
             huggingFaceToken = BuildConfig.JARVIS_HF_TOKEN
         )
+        folderSetupManager = FolderSetupManager(appContext, logger)
 
         eventBus.subscribe { event ->
             if (event is Event.StateChanged) {
@@ -85,6 +91,50 @@ object JarvisEngine {
         }
         
         initialized = true
+    }
+
+    suspend fun checkFolderSetup(context: Context): FolderSetupResult {
+        val notesBasePath = getNotesBasePath(context)
+        return folderSetupManager.checkFolderSetup(notesBasePath)
+    }
+
+    suspend fun ensureFolderSetup(context: Context): Boolean {
+        val notesBasePath = getNotesBasePath(context)
+        val result = folderSetupManager.checkFolderSetup(notesBasePath)
+        
+        if (result.needsSetup || result.hasMalformedFiles) {
+            _folderSetupResult.value = result
+            return false
+        }
+        
+        return true
+    }
+
+    fun getNotesBasePath(context: Context): String {
+        val savedPath = memorySettingsRepository.getNotesFolderPath()
+        val defaultPath = File(context.filesDir, EncryptedMemorySettingsRepository.DEFAULT_NOTES_FOLDER).absolutePath
+        
+        if (savedPath == null || savedPath.isBlank()) {
+            return defaultPath
+        }
+
+        if (savedPath.startsWith("content://")) {
+            logger.warn("JarvisEngine", "Unsupported content:// URI in memory settings: $savedPath. Falling back to default internal storage.")
+            return defaultPath
+        }
+
+        val file = File(savedPath)
+        return if (file.isAbsolute) {
+            savedPath
+        } else {
+            // Resolve relative paths against filesDir
+            File(context.filesDir, savedPath).absolutePath
+        }
+    }
+
+    fun folderSetupHandled() {
+        folderSetupChecked.set(true)
+        _folderSetupResult.value = null
     }
 
     fun initSttCallbacks(
@@ -111,10 +161,10 @@ object JarvisEngine {
         val appContext = context.applicationContext
         val installedAppLauncher = InstalledAppLauncher(appContext)
         val systemControlManager = SystemControlManager(appContext)
-        val notesFolderName = memorySettingsRepository.getNotesFolderPath() ?: EncryptedMemorySettingsRepository.DEFAULT_NOTES_FOLDER
-        val memoryBaseDir: Path = File(appContext.filesDir, notesFolderName).toPath()
+        
+        val notesBasePath = getNotesBasePath(appContext)
 
-        val memoryStore = MarkdownFileMemoryStore(baseDirectory = memoryBaseDir, writesEnabled = true)
+        val memoryStore = BrainMemoryStore.withCustomPath(appContext, notesBasePath)
 
         val skillRegistry = InMemorySkillRegistry().apply {
             register(AppLauncherSkill(installedAppLauncher::launch))

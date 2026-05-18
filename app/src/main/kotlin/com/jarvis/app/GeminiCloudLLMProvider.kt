@@ -1,5 +1,6 @@
 package com.jarvis.app
 
+import com.jarvis.llm.LLMException
 import com.jarvis.llm.LLMProvider
 import com.jarvis.logging.JarvisLogger
 import com.jarvis.logging.NoOpJarvisLogger
@@ -11,6 +12,7 @@ import io.ktor.http.*
 import io.ktor.http.content.TextContent
 import org.json.JSONArray
 import org.json.JSONObject
+import java.time.Duration
 import java.util.concurrent.TimeUnit
 
 class GeminiCloudLLMProvider(
@@ -66,7 +68,7 @@ class GeminiCloudLLMProvider(
                 message = "Gemini cloud network error",
                 data = mapOf("error" to (exception.message ?: "unknown"))
             )
-            throw IllegalStateException("Gemini cloud request failed: ${exception.message}", exception)
+            throw LLMException.NetworkError("Gemini cloud request failed: ${exception.message}", exception)
         }
 
         val responseStatus = response.status
@@ -78,30 +80,51 @@ class GeminiCloudLLMProvider(
         ))
 
         if (responseStatus.value !in 200..299) {
-            val errorMsg = try {
-                val errorJson = JSONObject(responseText)
-                errorJson.optJSONObject("error")?.optString("message") ?: "HTTP ${responseStatus.value}"
-            } catch (_: Exception) {
-                "HTTP ${responseStatus.value}: $responseText"
-            }
-            throw IllegalStateException("Gemini API error: $errorMsg")
+            handleErrorResponse(response, responseText)
         }
 
         return extractGeminiText(responseText)
     }
 
+    private fun handleErrorResponse(response: io.ktor.client.statement.HttpResponse, body: String) {
+        val errorJson = try {
+            JSONObject(body).optJSONObject("error")
+        } catch (_: Exception) {
+            null
+        }
+
+        val message = errorJson?.optString("message") ?: "HTTP ${response.status.value}: $body"
+        
+        val retryAfter = response.headers["Retry-After"]?.toLongOrNull()?.let { Duration.ofSeconds(it) }
+
+        when (response.status.value) {
+            400 -> throw LLMException.InvalidRequest(message)
+            401 -> throw LLMException.AuthenticationFailed(message)
+            403 -> {
+                if (message.contains("billing", ignoreCase = true) || message.contains("quota", ignoreCase = true)) {
+                    throw LLMException.QuotaExceeded(message)
+                }
+                throw LLMException.AuthenticationFailed(message)
+            }
+            429 -> throw LLMException.RateLimitReached(retryAfter, message)
+            in 500..599 -> throw LLMException.ServerError(retryAfter, message)
+            else -> throw LLMException.UnknownError(message)
+        }
+    }
+
+
     private fun extractGeminiText(responseText: String): String {
         val root = try {
             JSONObject(responseText)
         } catch (e: Exception) {
-            throw IllegalStateException("Failed to parse Gemini response as JSON: ${e.message}. Raw: ${responseText.take(200)}")
+            throw LLMException.UnknownError("Failed to parse Gemini response as JSON: ${e.message}. Raw: ${responseText.take(200)}")
         }
 
-        // Check for error in response
+        // Check for error in response (sometimes it's 200 but has error field)
         if (root.has("error")) {
             val error = root.getJSONObject("error")
             val message = error.optString("message", "Unknown error")
-            throw IllegalStateException("Gemini API error: $message")
+            throw LLMException.UnknownError("Gemini API error: $message")
         }
 
         val candidates = root.optJSONArray("candidates")
@@ -109,9 +132,9 @@ class GeminiCloudLLMProvider(
             val promptFeedback = root.optJSONObject("promptFeedback")
             val blockReason = promptFeedback?.optString("blockReason")
             if (!blockReason.isNullOrBlank()) {
-                throw IllegalStateException("Gemini blocked the request: $blockReason")
+                throw LLMException.ContentBlocked(blockReason, "Gemini blocked the request: $blockReason")
             }
-            throw IllegalStateException("Gemini returned no candidates. Check your prompt or safety settings. Raw: ${responseText.take(200)}")
+            throw LLMException.UnknownError("Gemini returned no candidates. Check your prompt or safety settings. Raw: ${responseText.take(200)}")
         }
 
         val firstCandidate = candidates.getJSONObject(0)
@@ -120,7 +143,10 @@ class GeminiCloudLLMProvider(
 
         if (parts == null || parts.length() == 0) {
             val finishReason = firstCandidate.optString("finishReason")
-            throw IllegalStateException("Gemini candidate has no content. Finish reason: $finishReason")
+            if (finishReason == "SAFETY") {
+                throw LLMException.ContentBlocked("SAFETY", "Gemini blocked output due to safety filters.")
+            }
+            throw LLMException.UnknownError("Gemini candidate has no content. Finish reason: $finishReason")
         }
 
         val sb = StringBuilder()
@@ -135,9 +161,10 @@ class GeminiCloudLLMProvider(
         val output = sb.toString().trim()
         if (output.isBlank()) {
             val finishReason = firstCandidate.optString("finishReason")
-            throw IllegalStateException("Gemini returned an empty text part. Finish reason: $finishReason")
+            throw LLMException.UnknownError("Gemini returned an empty text part. Finish reason: $finishReason")
         }
 
         return output
     }
 }
+

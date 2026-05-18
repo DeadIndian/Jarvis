@@ -18,6 +18,7 @@ data class MemorySettingsUiState(
 )
 
 class MemorySettingsViewModel(
+    private val context: android.content.Context,
     private val repository: MemorySettingsRepository,
     private val logger: JarvisLogger = NoOpJarvisLogger
 ) : ViewModel() {
@@ -30,7 +31,7 @@ class MemorySettingsViewModel(
 
     fun loadSettings() {
         viewModelScope.launch(Dispatchers.IO) {
-            val folderPath = repository.getNotesFolderPath() ?: EncryptedMemorySettingsRepository.DEFAULT_NOTES_FOLDER
+            val folderPath = repository.getNotesFolderPath() ?: JarvisEngine.getNotesBasePath(context)
             _uiState.value = _uiState.value.copy(
                 notesFolderPath = folderPath,
                 errorMessage = null,

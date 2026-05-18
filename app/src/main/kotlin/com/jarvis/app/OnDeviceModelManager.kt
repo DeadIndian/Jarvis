@@ -346,10 +346,16 @@ class LiteRtOnDeviceModelManager(
 
     private fun resolveModelDirectory(context: Context, overridePath: String): File {
         val trimmed = overridePath.trim()
-        if (trimmed.isNotEmpty()) {
-            return File(trimmed)
+        if (trimmed.isEmpty()) {
+            return File(context.filesDir, "llm")
         }
-        return File(context.filesDir, "llm")
+        
+        val file = File(trimmed)
+        return if (file.isAbsolute) {
+            file
+        } else {
+            File(context.filesDir, trimmed)
+        }
     }
 
     private data class ModelCatalogEntry(

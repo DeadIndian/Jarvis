@@ -1,5 +1,6 @@
 package com.jarvis.app
 
+import com.jarvis.llm.LLMException
 import com.jarvis.llm.LLMProvider
 import com.jarvis.llm.LLMRequest
 import com.jarvis.llm.LLMResponse
@@ -83,7 +84,7 @@ class LLMProviderManager(
                     "errorType" to errorType.name,
                     "message" to e.message
                 ))
-                recordFailure(provider.name, errorType, e.message ?: "Unknown error")
+                recordFailure(provider.name, errorType, e)
             }
         }
 
@@ -129,33 +130,50 @@ class LLMProviderManager(
         }
     }
 
-    private suspend fun recordFailure(providerName: String, errorType: ErrorType, message: String) {
+    private suspend fun recordFailure(providerName: String, errorType: ErrorType, e: Exception) {
         mutex.withLock {
             val state = providerStates.getOrPut(providerName) { ProviderState(name = providerName) }
-            state.lastError = message
+            state.lastError = e.message
             state.errorCount++
 
-            state.cooldownUntil = when (errorType) {
-                ErrorType.RATE_LIMIT -> Instant.now().plus(Duration.ofHours(1))
-                ErrorType.CREDIT_EXHAUSTED -> Instant.now().plus(Duration.ofHours(6))
-                ErrorType.QUOTA_EXCEEDED -> Instant.now().plus(Duration.ofHours(24))
-                ErrorType.AUTH_INVALID -> Instant.now().plus(Duration.ofDays(7))
-                ErrorType.SERVER_ERROR -> Instant.now().plus(Duration.ofMinutes(5))
-                ErrorType.NETWORK_ERROR -> Instant.now().plus(Duration.ofMinutes(1))
-                ErrorType.UNKNOWN -> Instant.now().plus(Duration.ofMinutes(10))
+            val customRetryAfter = if (e is LLMException.RateLimitReached) e.retryAfter else null
+            
+            state.cooldownUntil = when {
+                customRetryAfter != null -> Instant.now().plus(customRetryAfter)
+                errorType == ErrorType.RATE_LIMIT -> Instant.now().plus(Duration.ofMinutes(15))
+                errorType == ErrorType.CREDIT_EXHAUSTED -> Instant.now().plus(Duration.ofDays(1))
+                errorType == ErrorType.QUOTA_EXCEEDED -> Instant.now().plus(Duration.ofHours(5))
+                errorType == ErrorType.AUTH_INVALID -> Instant.now().plus(Duration.ofDays(7))
+                errorType == ErrorType.SERVER_ERROR -> Instant.now().plus(Duration.ofMinutes(5))
+                errorType == ErrorType.NETWORK_ERROR -> Instant.now().plus(Duration.ofMinutes(1))
+                else -> Instant.now().plus(Duration.ofMinutes(10))
             }
 
             logger.info("llm", "Provider cooldown set", mapOf(
                 "provider" to providerName,
                 "errorType" to errorType.name,
-                "cooldownMinutes" to Duration.between(Instant.now(), state.cooldownUntil).toMinutes()
+                "cooldownMinutes" to Duration.between(Instant.now(), state.cooldownUntil).toMinutes(),
+                "message" to (e.message ?: "")
             ))
         }
     }
 
     private fun detectErrorType(e: Exception): ErrorType {
-        val message = (e.message ?: "").lowercase()
+        if (e is LLMException) {
+            return when (e) {
+                is LLMException.RateLimitReached -> ErrorType.RATE_LIMIT
+                is LLMException.AuthenticationFailed -> ErrorType.AUTH_INVALID
+                is LLMException.QuotaExceeded -> ErrorType.QUOTA_EXCEEDED
+                is LLMException.InsufficientCredits -> ErrorType.CREDIT_EXHAUSTED
+                is LLMException.InvalidRequest -> ErrorType.UNKNOWN
+                is LLMException.ServerError -> ErrorType.SERVER_ERROR
+                is LLMException.NetworkError -> ErrorType.NETWORK_ERROR
+                is LLMException.ContentBlocked -> ErrorType.UNKNOWN
+                is LLMException.UnknownError -> ErrorType.UNKNOWN
+            }
+        }
 
+        val message = (e.message ?: "").lowercase()
         return when {
             message.contains("insufficient_quota") ||
             message.contains("billing") ||

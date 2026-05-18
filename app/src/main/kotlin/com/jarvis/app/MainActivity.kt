@@ -20,6 +20,10 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
 import com.jarvis.app.ui.MainScreen
 import com.jarvis.app.ui.MainTab
+import com.jarvis.app.ui.FolderSetupDialog
+import com.jarvis.app.ui.MalformedFilesDialog
+import com.jarvis.app.ui.FolderSetupProgressDialog
+import com.jarvis.app.ui.FolderSetupResultDialog
 import com.jarvis.app.ui.theme.JarvisTheme
 import com.jarvis.app.utils.SoundPlayer
 import com.jarvis.core.Event
@@ -67,7 +71,7 @@ open class MainActivity : AppCompatActivity() {
     protected var continuousVoiceModeEnabled = false
     private var vadEngine: com.jarvis.app.vad.VadEngine? = null
 
-    private lateinit var logger: AndroidLogJarvisLogger
+    protected lateinit var logger: AndroidLogJarvisLogger
     private lateinit var textToSpeech: TextToSpeech
     private var isTextToSpeechReady: Boolean = false
     
@@ -85,9 +89,10 @@ open class MainActivity : AppCompatActivity() {
         }
     }
     
-    private lateinit var modelViewModel: ModelStatusViewModel
-    private lateinit var settingsViewModel: LlmSettingsViewModel
-    private lateinit var memorySettingsViewModel: MemorySettingsViewModel
+    protected lateinit var modelViewModel: ModelStatusViewModel
+    protected lateinit var settingsViewModel: LlmSettingsViewModel
+    protected lateinit var memorySettingsViewModel: MemorySettingsViewModel
+    protected lateinit var folderSetupViewModel: FolderSetupViewModel
 
     protected open fun onJarvisStateChanged(state: JarvisState) = Unit
 
@@ -102,7 +107,33 @@ open class MainActivity : AppCompatActivity() {
     private val folderPicker = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         uri?.let {
             contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
-            memorySettingsViewModel.updateNotesFolderPath(it.toString())
+            
+            // Try to resolve a file path from the URI if possible, otherwise use the URI string
+            // and let the engine handle the error or try to use it.
+            val path = try {
+                resolvePathFromTreeUri(it) ?: it.toString()
+            } catch (e: Exception) {
+                it.toString()
+            }
+            memorySettingsViewModel.updateNotesFolderPath(path)
+        }
+    }
+
+    private fun resolvePathFromTreeUri(uri: android.net.Uri): String? {
+        val docId = try {
+            android.provider.DocumentsContract.getTreeDocumentId(uri)
+        } catch (e: Exception) {
+            return null
+        }
+        val split = docId.split(":")
+        val type = split[0]
+        val relativePath = if (split.size > 1) split[1] else ""
+
+        return if ("primary".equals(type, ignoreCase = true)) {
+            android.os.Environment.getExternalStorageDirectory().absolutePath + "/" + relativePath
+        } else {
+            // Non-primary storage (SD card) - more complex to resolve absolute path
+            null
         }
     }
 
@@ -171,9 +202,16 @@ open class MainActivity : AppCompatActivity() {
         memorySettingsViewModel = ViewModelProvider(this, object : ViewModelProvider.Factory {
             override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T {
                 @Suppress("UNCHECKED_CAST")
-                return MemorySettingsViewModel(JarvisEngine.memorySettingsRepository, logger) as T
+                return MemorySettingsViewModel(applicationContext, JarvisEngine.memorySettingsRepository, logger) as T
             }
         }).get(MemorySettingsViewModel::class.java)
+
+        folderSetupViewModel = ViewModelProvider(this, object : ViewModelProvider.Factory {
+            override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T {
+                @Suppress("UNCHECKED_CAST")
+                return FolderSetupViewModel(applicationContext, logger, null) as T
+            }
+        }).get(FolderSetupViewModel::class.java)
 
         initializeTextToSpeech()
         
@@ -199,6 +237,12 @@ open class MainActivity : AppCompatActivity() {
                 onState = { state -> appendLog("Output state: $state") },
                 onSpeak = { text -> speakAfterActionSound(text) }
             )
+            
+            val folderSetupResult = JarvisEngine.checkFolderSetup(this@MainActivity)
+            if (folderSetupResult.needsSetup || folderSetupResult.hasMalformedFiles) {
+                folderSetupViewModel.checkFolderSetup(JarvisEngine.getNotesBasePath(this@MainActivity))
+            }
+            
             JarvisEngine.buildOrchestrator(this@MainActivity, outputChannel)
             val state = JarvisEngine.orchestrator.currentState()
             syncRuntimeService(state)
@@ -216,6 +260,8 @@ open class MainActivity : AppCompatActivity() {
                     val state = JarvisEngine.stateFlow.collectAsState().value
                     val logs = logsFlow.collectAsState().value
                     val selectedTab = selectedMainTabFlow.collectAsState().value
+                    val folderSetupUiState = folderSetupViewModel.uiState.collectAsState().value
+                    
                     MainScreen(
                         jarvisState = state.name,
                         logs = logs,
@@ -226,7 +272,10 @@ open class MainActivity : AppCompatActivity() {
                         settingsUiState = settingsViewModel.uiState.collectAsState().value,
                         memorySettingsUiState = memorySettingsViewModel.uiState.collectAsState().value,
                         onTabSelected = { _selectedMainTabFlow.value = it },
-                        onUseModelClicked = { initializeModelBackground() },
+                        onUseModelClicked = { 
+                            folderSetupViewModel.checkFolderSetup(JarvisEngine.getNotesBasePath(this@MainActivity))
+                            initializeModelBackground() 
+                        },
                         onModelSelected = { modelViewModel.selectModel(it) },
                         onRefreshModels = { modelViewModel.refreshModelList() },
                         onDownloadModel = { modelViewModel.downloadModel(it) },
@@ -237,8 +286,59 @@ open class MainActivity : AppCompatActivity() {
                         onClearGeminiApiKey = { settingsViewModel.clearGeminiApiKey(); refreshOrchestrator() },
                         onMemoryFolderChanged = { memorySettingsViewModel.updateNotesFolderPath(it) },
                         onSelectMemoryFolder = { folderPicker.launch(null) },
-                        onSaveMemoryFolder = { memorySettingsViewModel.saveNotesFolderPath() },
-                        onClearMemoryFolder = { memorySettingsViewModel.clearNotesFolderPath() }
+                        onSaveMemoryFolder = { 
+                            memorySettingsViewModel.saveNotesFolderPath()
+                            val newPath = JarvisEngine.getNotesBasePath(this@MainActivity)
+                            folderSetupViewModel.checkFolderSetup(newPath)
+                            refreshOrchestrator()
+                        },
+                        onClearMemoryFolder = { 
+                            memorySettingsViewModel.clearNotesFolderPath()
+                            val newPath = JarvisEngine.getNotesBasePath(this@MainActivity)
+                            folderSetupViewModel.checkFolderSetup(newPath)
+                            refreshOrchestrator()
+                        }
+                    )
+
+                    FolderSetupDialog(
+                        uiState = folderSetupUiState,
+                        onFormatFolder = {
+                            folderSetupViewModel.setupFolder(JarvisEngine.getNotesBasePath(this@MainActivity)) {
+                                JarvisEngine.folderSetupHandled()
+                                refreshOrchestrator()
+                            }
+                        },
+                        onDismiss = { folderSetupViewModel.dismissDialogs() }
+                    )
+
+                    MalformedFilesDialog(
+                        uiState = folderSetupUiState,
+                        onOrganizeWithAI = {
+                            val apiKey = settingsViewModel.uiState.value.geminiApiKey
+                            if (apiKey.isNotBlank()) {
+                                val provider = GeminiCloudLLMProvider(apiKey = apiKey, logger = logger)
+                                folderSetupViewModel.classifyAndOrganizeFiles(
+                                    JarvisEngine.getNotesBasePath(this@MainActivity),
+                                    provider
+                                ) {
+                                    JarvisEngine.folderSetupHandled()
+                                    refreshOrchestrator()
+                                }
+                            } else {
+                                folderSetupViewModel.skipOrganizingFiles()
+                            }
+                        },
+                        onSkip = { folderSetupViewModel.skipOrganizingFiles() }
+                    )
+
+                    FolderSetupProgressDialog(
+                        uiState = folderSetupUiState,
+                        onDismiss = { }
+                    )
+
+                    FolderSetupResultDialog(
+                        uiState = folderSetupUiState,
+                        onDismiss = { folderSetupViewModel.clearMessages() }
                     )
                 }
             }
@@ -278,7 +378,10 @@ open class MainActivity : AppCompatActivity() {
 
     override fun onStop() {
         super.onStop()
-        if (isFinishing || this is AssistantOverlayActivity) {
+        // Only disable voice mode if the activity is actually being finished
+        // or if it's the overlay being dismissed. 
+        // We avoid disabling it on temporary stop (e.g. screen off) unless finishing.
+        if (isFinishing) {
             disableContinuousVoiceMode()
         }
     }
@@ -295,7 +398,7 @@ open class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun refreshOrchestrator() {
+    protected fun refreshOrchestrator() {
         lifecycleScope.launch {
             val outputChannel = UiOutputChannel(
                 onState = { state -> appendLog("Output state: $state") },

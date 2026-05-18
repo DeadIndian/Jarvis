@@ -15,6 +15,47 @@ class RuleBasedIntentRouter : IntentRouter {
             return currentTime
         }
 
+        // Reminders/Storing info should take precedence over simple word matches like "open"
+        // to avoid hijacking "remind me to open X"
+        if (normalized.startsWith("remember") || normalized.contains(" remember ") ||
+            normalized.startsWith("remind me") || normalized.contains(" remind me ") ||
+            normalized.startsWith("remeber") || normalized.contains(" remeber ") ||
+            normalized.startsWith("save ") || normalized.contains(" save ") ||
+            normalized.startsWith("store ") || normalized.contains(" store ")) {
+            
+            val afterRemember = when {
+                normalized.startsWith("remember ") -> input.substring("remember ".length).trim()
+                normalized.startsWith("remember") -> ""
+                normalized.contains(" remember ") -> input.substringAfter("remember ").trim()
+                normalized.startsWith("remind me ") -> input.substring("remind me ".length).trim()
+                normalized.startsWith("remind me") -> ""
+                normalized.contains(" remind me ") -> input.substringAfter("remind me ").trim()
+                normalized.startsWith("remeber ") -> input.substring("remeber ".length).trim()
+                normalized.startsWith("remeber") -> ""
+                normalized.contains(" remeber ") -> input.substringAfter("remeber ").trim()
+                normalized.startsWith("save ") -> input.substring("save ".length).trim()
+                normalized.contains(" save ") -> input.substringAfter("save ").trim()
+                normalized.startsWith("store ") -> input.substring("store ".length).trim()
+                else -> input.substringAfter("store ").trim()
+            }
+            
+            val (folder, info) = if (afterRemember.isNotBlank()) {
+                parseRememberWithFolder(afterRemember)
+            } else {
+                Pair(null, "")
+            }
+
+            val entities = mutableMapOf("info" to info)
+            if (folder != null) {
+                entities["folder"] = folder
+            }
+            return IntentResult(
+                intent = "REMEMBER",
+                confidence = 0.9,
+                entities = entities
+            )
+        }
+
         val alarmTimer = parseAlarmTimer(normalized)
         if (alarmTimer != null) {
             return alarmTimer
@@ -26,25 +67,12 @@ class RuleBasedIntentRouter : IntentRouter {
         }
 
         return when {
-            normalized.contains("open ") -> {
+            normalized.startsWith("open ") || (normalized.contains("open ") && !normalized.contains("remind")) -> {
                 val app = input.substringAfter("open ", missingDelimiterValue = "").trim()
                 IntentResult(
                     intent = "OPEN_APP",
                     confidence = 0.95,
                     entities = mapOf("app" to app.ifBlank { "unknown" })
-                )
-            }
-
-            normalized.startsWith("remember ") || normalized.contains(" remember ") -> {
-                val info = if (normalized.startsWith("remember ")) {
-                    input.substring("remember ".length).trim()
-                } else {
-                    input.substringAfter("remember ").trim()
-                }
-                IntentResult(
-                    intent = "REMEMBER",
-                    confidence = 0.9,
-                    entities = mapOf("info" to info)
                 )
             }
 
@@ -54,6 +82,42 @@ class RuleBasedIntentRouter : IntentRouter {
                 entities = emptyMap()
             )
         }
+    }
+
+    private fun parseRememberWithFolder(input: String): Pair<String?, String> {
+        val standardFolders = listOf("concepts", "projects", "procedures", "memories", "journal", "people", "inbox", "references", "system")
+        
+        val inFolderPattern = Regex("""in\s+([a-zA-Z0-9_/-]+)\s+(.+)$""", RegexOption.IGNORE_CASE)
+        val toFolderPattern = Regex("""to\s+([a-zA-Z0-9_/-]+)\s+(.+)$""", RegexOption.IGNORE_CASE)
+        val underPattern = Regex("""under\s+([a-zA-Z0-9_/-]+)\s+(.+)$""", RegexOption.IGNORE_CASE)
+        
+        val inFolderMatch = inFolderPattern.find(input)
+        if (inFolderMatch != null) {
+            val folder = inFolderMatch.groupValues[1].trim()
+            val info = inFolderMatch.groupValues[2].trim()
+            // Be careful not to match things like "in the kitchen" as folder="the"
+            if (folder !in listOf("the", "a", "an", "my", "your")) {
+                return Pair(folder, info)
+            }
+        }
+        
+        val toFolderMatch = toFolderPattern.find(input)
+        if (toFolderMatch != null) {
+            val folder = toFolderMatch.groupValues[1].trim().lowercase()
+            val info = toFolderMatch.groupValues[2].trim()
+            // Only treat as folder if it's one of our standard folders
+            // This prevents "to call mom" matching folder="call"
+            if (folder in standardFolders) {
+                return Pair(folder, info)
+            }
+        }
+        
+        val underMatch = underPattern.find(input)
+        if (underMatch != null) {
+            return Pair(underMatch.groupValues[1].trim(), underMatch.groupValues[2].trim())
+        }
+        
+        return Pair(null, input)
     }
 
     private fun parseHelpIntent(normalized: String): IntentResult? {

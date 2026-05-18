@@ -152,10 +152,16 @@ class PipelineOrchestrator(
                 shouldKeepVoiceSessionLive = false
             }
 
-            if (shouldSpeakResponse) {
+            if (shouldSpeakResponse && spokenText.isNotBlank()) {
                 transitionState(JarvisState.SPEAKING)
                 outputChannel.showSpeaking()
                 outputChannel.speak(spokenText)
+            } else if (shouldSpeakResponse && spokenText.isBlank()) {
+                logger.warn("pipeline", "Empty response from provider", mapOf("requestId" to requestId))
+                // For empty responses in voice mode, we might want to stay active instead of closing
+                if (!isVoiceInput) {
+                    transitionState(JarvisState.BARN_DOOR)
+                }
             } else {
                 transitionState(JarvisState.BARN_DOOR)
             }
@@ -216,11 +222,11 @@ class PipelineOrchestrator(
         val conversational = CONVERSATIONAL_PREFIXES.any { normalized.startsWith(it) } ||
             CONVERSATIONAL_KEYWORDS.any { normalized.contains(it) }
         val multiStep = MULTI_STEP_MARKERS.any { normalized.contains(it) }
-        val singleSkillIntent = intent.intent in SINGLE_SKILL_INTENTS
+        val isLocalIntent = intent.intent in LOCAL_INTENTS
 
         return when {
             intent.intent == "UNKNOWN" -> ExecutionMode.SERVER_AGENT
-            singleSkillIntent -> ExecutionMode.LOCAL_FAST
+            isLocalIntent -> ExecutionMode.LOCAL_FAST
             longFreeForm -> ExecutionMode.SERVER_AGENT
             conversational -> ExecutionMode.SERVER_AGENT
             multiStep -> ExecutionMode.SERVER_AGENT
@@ -390,7 +396,15 @@ class PipelineOrchestrator(
 
     companion object {
         private const val MAX_MEMORY_CHARS = 400
-        private val SINGLE_SKILL_INTENTS = setOf("OPEN_APP", "SYSTEM_CONTROL", "CurrentTime", "SHOW_HELP")
+        private val LOCAL_INTENTS = setOf(
+            "OPEN_APP", 
+            "SYSTEM_CONTROL", 
+            "CurrentTime", 
+            "SHOW_HELP", 
+            "REMEMBER", 
+            "SPEAK",
+            "SEARCH"
+        )
         private val CONVERSATIONAL_PREFIXES = listOf(
             "what",
             "why",

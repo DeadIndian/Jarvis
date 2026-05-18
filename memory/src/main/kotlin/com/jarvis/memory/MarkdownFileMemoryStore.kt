@@ -160,7 +160,39 @@ class MarkdownFileMemoryStore(
         reindexFile(target)
     }
 
-    override fun retrieve(query: String, k: Int): List<MemoryChunk> {
+    override suspend fun addNote(title: String, content: String, type: NoteType, tags: List<String>) {
+        val dir = when (type) {
+            NoteType.JOURNAL -> DAILY_LOGS_DIR
+            NoteType.SYSTEM -> SYSTEM_DIR
+            else -> NOTES_DIR
+        }
+        val key = "$dir/$title"
+        put(key, content)
+    }
+
+    override suspend fun getGraph(nodeId: String, depth: Int): List<KnowledgeNode> {
+        return emptyList()
+    }
+
+    override suspend fun retrieve(query: String, limit: Int): List<RetrievalResult> {
+        val scored = rankChunksWithScores(query, limit)
+        return scored.map { (chunk, score) ->
+            RetrievalResult(
+                node = KnowledgeNode(
+                    id = chunk.id,
+                    file = chunk.filePath,
+                    type = NoteType.INBOX,
+                    title = chunk.section,
+                    content = chunk.text,
+                    updatedAt = chunk.timestamp
+                ),
+                score = score,
+                reason = "semantic"
+            )
+        }
+    }
+
+    override fun retrieveChunks(query: String, k: Int): List<MemoryChunk> {
         if (query.isBlank()) {
             return emptyList()
         }
@@ -256,6 +288,10 @@ class MarkdownFileMemoryStore(
     }
 
     private fun rankChunks(query: String, limit: Int): List<MemoryChunk> {
+        return rankChunksWithScores(query, limit).map { it.chunk }
+    }
+
+    private fun rankChunksWithScores(query: String, limit: Int): List<ScoredChunk> {
         val queryVector = embeddingModel.embed(query)
         val now = Instant.now().epochSecond
 
@@ -269,7 +305,6 @@ class MarkdownFileMemoryStore(
             }
             .sortedByDescending { it.score }
             .take(limit)
-            .map { it.chunk }
     }
 
     private fun cosineSimilarity(a: FloatArray, b: FloatArray): Float {
