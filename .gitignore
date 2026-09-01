@@ -1,0 +1,46 @@
+# Gradle
+.gradle/
+**/build/
+
+# Native build artifacts (CMake/NDK)
+**/.cxx/
+.kotlin/
+
+# Editor/agent local state
+.codex
+.codex/
+
+# On-device model weights (large binaries, distributed separately)
+*.litertlm
+*.task
+*.tflite
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Local Android SDK config
+local.properties
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Generated artifacts
+*.apk
+*.aab
+*.keystore
+*.jks
+
+# Logs
+*.log
+
+# Local secrets/config
+.env
+.env.*
+!.env.example
+
+# Duplicate source output (accidentally committed, now removed)
+**/bin/
