@@ -1,0 +1,17 @@
+<resources>
+    <style name="Theme.JarvisMvp" parent="Theme.MaterialComponents.DayNight.DarkActionBar" />
+
+    <style name="Theme.JarvisMvp.Splash" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="android:windowBackground">@drawable/splash_background</item>
+        <item name="android:windowNoTitle">true</item>
+    </style>
+
+    <style name="Theme.JarvisMvp.Overlay" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowContentOverlay">@null</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowIsFloating">true</item>
+        <item name="android:backgroundDimEnabled">true</item>
+    </style>
+</resources>
